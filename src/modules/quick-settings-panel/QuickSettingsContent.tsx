@@ -62,9 +62,8 @@ export default function QuickSettingsContent({
   onPreferenceChange,
 }: QuickSettingsContentProps) {
   const { t } = useTranslation('settings');
-  const inputSettingToggles = false
-    ? INPUT_SETTING_TOGGLES
-    : INPUT_SETTING_TOGGLES.filter(({ key }) => key !== 'voiceEnabled');
+  // Sandlot: voice is not part of the build, so its toggle is never offered.
+  const inputSettingToggles = INPUT_SETTING_TOGGLES.filter(({ key }) => key !== 'voiceEnabled');
 
   const renderToggleRows = (items: PreferenceToggleItem[]) => (
     items.map(({ key, labelKey, icon }) => (

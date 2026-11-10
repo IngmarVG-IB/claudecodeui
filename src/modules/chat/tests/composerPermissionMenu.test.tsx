@@ -4,8 +4,7 @@ import { act, fireEvent, render } from '@testing-library/react';
 import { afterEach, test, vi } from 'vitest';
 
 import type { PermissionMode } from '@/shared/types';
-import { i18n } from '@/modules/i18n';
-import frChat from '@/modules/i18n/locales/fr/chat.json';
+import '@/modules/i18n';
 import ComposerPermissionMenu from '@/modules/chat/composer/ComposerPermissionMenu';
 import { PromptInputFooter, PromptInputTools } from '@/modules/chat/composer/PromptInput';
 

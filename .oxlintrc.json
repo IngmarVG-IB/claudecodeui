@@ -71,7 +71,9 @@
           "server/shared/frontmatter.ts",
           "server/shared/claude-cli-path.ts",
           "server/shared/image-attachments.ts",
-          "server/shared/message-unification.ts"
+          "server/shared/message-unification.ts",
+          "server/shared/permission-modes.ts",
+          "server/sandlot/*.ts"
         ],
         "mode": "file"
       },
@@ -95,7 +97,9 @@
           "src/shared/uiPreferences.ts",
           "src/shared/selectedProvider.ts",
           "src/shared/authToken.ts",
-          "src/shared/voiceConfig.ts",
+          "src/shared/basePath.ts",
+          "src/shared/authenticatedEventSource.ts",
+          "src/shared/sandlotLinks.ts",
           "src/shared/codeEditorSettings.ts",
           "src/shared/userSettings.ts",
           "src/shared/chatDrafts.ts",
