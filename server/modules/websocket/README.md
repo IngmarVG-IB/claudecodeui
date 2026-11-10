@@ -19,7 +19,7 @@ Shared chat client registry and open-state constant used by other modules.
 
 ## Why Dependency Injection Is Used
 
-The module receives runtime-specific functions from `server/index.js` instead of importing legacy runtime files directly.
+The module receives runtime-specific functions from `server/index.ts` instead of importing legacy runtime files directly.
 
 Benefits:
 
@@ -33,7 +33,7 @@ Benefits:
 |---|---|
 | `services/websocket-server.service.ts` | Creates `WebSocketServer`, binds `verifyClient`, routes connection by pathname |
 | `services/websocket-auth.service.ts` | Authenticates upgrade requests and attaches `request.user` |
-| `services/chat-websocket.service.ts` | Handles the `/ws` chat protocol (`chat.send` / `chat.abort` / `chat.subscribe` / `chat.permission-response`) |
+| `services/chat-websocket.service.ts` | Handles the `/ws` chat protocol (`chat.send` / `chat.steer` / `chat.abort` / `chat.stop-task` / `chat.subscribe` / `chat.permission-response`) |
 | `services/chat-run-registry.service.ts` | Tracks live provider runs per app session id: seq numbering, event replay buffer, provider-id mapping, completion state |
 | `services/chat-session-writer.service.ts` | Gateway writer handed to provider runtimes: remaps provider session ids to app ids, swallows `session_created`, assigns `seq` |
 | `services/shell-websocket.service.ts` | Handles `/shell` PTY lifecycle, reconnect buffering, auth URL detection |
@@ -59,7 +59,7 @@ flowchart LR
   G --> L[Upstream Plugin ws://127.0.0.1:port/ws]
 
   I --> M[projects.service loading_progress]
-  I --> N[sessions-watcher.service session_upserted/session_deleted]
+  I --> N[sessions-watcher.service session_upserted]
 ```
 
 ## Connection Handshake + Routing
@@ -108,7 +108,7 @@ When a chat socket connects:
 
 1. Add socket to `connectedClients`.
 2. Parse each incoming message with `parseIncomingJsonObject`.
-3. Dispatch by `data.type` (four message types, none provider-specific).
+3. Dispatch by `data.type` (six message types, none provider-specific).
 4. On close, remove socket from `connectedClients`.
 
 ### Session identity model
@@ -117,8 +117,8 @@ The frontend only ever knows the **app session id** (allocated by
 `POST /api/providers/sessions` or discovered via the session index). The
 provider-native id (JSONL file name, CLI resume id) stays inside the backend:
 
-1. `chat.send` resolves the app id to `{ provider, provider_session_id, project_path }` from the sessions DB.
-2. The provider runtime receives the provider-native id for resume.
+1. `chat.send` resolves the app id to `{ provider, project_path }` from the sessions DB and passes the **app session id** to the provider runtime.
+2. The provider runtime resolves the provider-native id from the sessions DB itself (`sessionsService.resolveProviderSessionId`) at the exact points its CLI/SDK needs it (resume flags, provider-owned databases). Runtimes key their process maps by the app session id, so abort and pending-approval lookups use app ids too.
 3. The `ChatSessionWriter` remaps every outbound event back to the app id, and turns `session_created` announcements into a DB mapping update instead of forwarding them.
 
 ### Chat Message Dispatch
@@ -129,16 +129,19 @@ flowchart TD
   B -->|invalid| C[send kind:protocol_error]
   B -->|ok| D{data.type}
 
-  D -->|chat.send| E[resolve session row -> startRun -> spawnFns provider]
-  D -->|chat.abort| F[abortFns provider + synthetic complete]
+  D -->|chat.send| E[resolve session row -> startRun -> providerRuntimeService.run]
+  D -->|chat.edit-send| E2[history_truncated -> rewind or resume at the anchor -> same as chat.send]
+  D -->|chat.steer| E3[providerRuntimeService.steer -> chat_steer_accepted, or protocol_error STEER_UNAVAILABLE]
+  D -->|chat.abort| F[providerRuntimeService.abort + synthetic complete]
+  D -->|chat.stop-task| F2[providerRuntimeService.stopBackgroundTask]
   D -->|chat.subscribe| G[chat_subscribed ack + attach socket + replay events seq > lastSeq]
-  D -->|chat.permission-response| H[resolveToolApproval]
+  D -->|chat.permission-response| H[providerRuntimeService.resolveToolApproval]
   D -->|other| I[send kind:protocol_error]
 ```
 
 ### Chat Notes
 
-1. **Unified envelope**: every server-to-client frame carries a `kind` — either a provider `NormalizedMessage` kind or a gateway kind (`chat_subscribed`, `session_upserted`, `session_deleted`, `loading_progress`, `auth_refresh`, `protocol_error`). There is no second `type`-based protocol.
+1. **Unified envelope**: every server-to-client frame carries a `kind` — either a provider `NormalizedMessage` kind or a gateway kind (`chat_subscribed`, `session_upserted`, `loading_progress`, `protocol_error`). There is no second `type`-based protocol.
 2. **Unified terminal lifecycle**: every provider run ends with exactly one `complete` message built by `createCompleteMessage()` (`server/shared/utils.ts`): `{ kind: "complete", sessionId, actualSessionId, exitCode, success, aborted }`. The chat handler emits a synthetic `complete` for runs that crash or get aborted, and the run registry drops duplicate completes.
 3. **Per-run event log**: every live event gets a monotonically increasing `seq`. `chat.subscribe { sessions: [{ sessionId, lastSeq }] }` re-attaches the live stream to the requesting socket (any provider, not just Claude) and replays events with `seq > lastSeq`. If the buffer no longer covers `lastSeq`, the client refreshes over REST.
 4. `chat_subscribed` includes `isProcessing` (replaces `check-session-status`) and `pendingPermissions` (replaces `get-pending-permissions`).
@@ -166,7 +169,6 @@ stateDiagram-v2
 
   Running --> Running: input -> pty.write
   Running --> Running: resize -> pty.resize
-  Running --> Killed: terminate -> pty.kill
   Running --> Running: onData -> buffer + output + auth_url detection
   Running --> Exited: onExit
   Running --> Detached: ws close
@@ -177,11 +179,6 @@ stateDiagram-v2
   Killed --> [*]
   EmitError --> WaitingInit
 ```
-
-Multiple browser tabs can attach to the same PTY session key at the same time.
-The shell service keeps a set of attached sockets per PTY, fans output and URL
-events to every open socket, and only starts the detach timeout after the last
-socket closes.
 
 ### Shell Behaviors in Detail
 
@@ -199,8 +196,6 @@ Stores up to 5000 chunks for replay on reconnect.
 Strips ANSI, accumulates text buffer, extracts URLs, emits `auth_url` once per normalized URL, supports `autoOpen`.
 7. Close behavior:
 Socket disconnect does not instantly kill PTY; session is kept alive and terminated on timeout.
-8. Explicit termination:
-`message.type == terminate` kills the keyed PTY session immediately and removes it from the reconnect cache.
 
 ## `/plugin-ws/:pluginName` Proxy Flow
 
@@ -220,7 +215,7 @@ sequenceDiagram
     alt Plugin not running
       Proxy-->>Client: close(4404, "Plugin not running")
     else Port found
-      Proxy->>Upstream: new WebSocket(ws://127.0.0.1:port/ws, signed identity headers)
+      Proxy->>Upstream: new WebSocket(ws://127.0.0.1:port/ws)
       Client-->>Upstream: relay messages bidirectionally
       Upstream-->>Client: relay messages bidirectionally
       Upstream-->>Client: close propagation
@@ -229,11 +224,6 @@ sequenceDiagram
     end
   end
 ```
-
-Plugin HTTP RPC and WebSocket proxy requests include the signed
-`X-Plugin-User-Payload`, `X-Plugin-User-Signature`, and
-`X-Plugin-User-Algorithm` headers when an authenticated user is available.
-Plugins receive their per-plugin verification key in `PLUGIN_IDENTITY_KEY`.
 
 ## Shared Client Registry and Broadcasts
 
@@ -244,7 +234,7 @@ That shared set is consumed by:
 1. `modules/projects/services/projects-with-sessions-fetch.service.ts`
 Broadcasts `kind: loading_progress` while project snapshots are being built.
 2. `modules/providers/services/sessions-watcher.service.ts`
-Broadcasts per-session `kind: session_upserted` deltas when provider session artifacts change and `kind: session_deleted` when watched transcript files disappear (no full project snapshots).
+Broadcasts per-session `kind: session_upserted` deltas when provider session artifacts change (no full project snapshots).
 
 This design centralizes cross-module realtime fanout without requiring route-local references to WebSocket internals.
 
@@ -282,5 +272,5 @@ To add a new websocket route:
 1. Add a new handler service under `services/`.
 2. Extend `WebSocketServerDependencies` in `websocket-server.service.ts` if needed.
 3. Add a new pathname branch in the router.
-4. Wire dependency injection from `server/index.js`.
+4. Wire dependency injection from `server/index.ts`.
 5. Keep `index.ts` as barrel-only export surface.

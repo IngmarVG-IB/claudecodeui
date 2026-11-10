@@ -6,18 +6,16 @@
     "requireCleanWorkingDir": true
   },
   "npm": {
-    "publish": false
+    "publish": true,
+    "skipChecks": true,
+    "publishArgs": ["--access public", "--loglevel warn"]
   },
   "github": {
     "release": true,
-    "releaseName": "CloudCLI UI v${version}",
-    "assets": [
-      "release/local-server/cloudcli-local-server-${version}-*.tar.gz",
-      "release/local-server/cloudcli-local-server-${version}-*.tar.gz.sha256"
-    ]
+    "releaseName": "CloudCLI UI v${version}"
   },
   "hooks": {
-    "after:bump": ["npm run server:bundle"]
+    "before:init": ["npm run build"]
   },
   "plugins": {
     "@release-it/conventional-changelog": {

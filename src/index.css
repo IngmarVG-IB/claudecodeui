@@ -140,7 +140,7 @@
     height: 100%;
     margin: 0;
     padding: 0;
-    /* The app shell is a fixed inset-0 container (see AppContent), so the
+    /* The app shell is a fixed inset-0 container (see ProjectWorkspaceShell), so the
        document itself never needs to scroll. Clipping it removes the phantom
        full-height page scrollbar and disables the browser pull-to-refresh
        gesture that reloads the page when scrolling up on mobile. */
@@ -603,14 +603,13 @@
   .chat-message.error {
     contain-intrinsic-size: auto 96px;
   }
-}
 
-/* Mobile touch optimization and safe areas */
-@media (max-width: 768px) {
-  * {
-    touch-action: manipulation;
-    -webkit-tap-highlight-color: transparent;
-  }
+  /* Mobile touch optimization and safe areas */
+  @media (max-width: 768px) {
+    * {
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
+    }
     
     /* Allow vertical scrolling in scroll containers */
     .overflow-y-auto, [data-scroll-container] {
@@ -666,12 +665,6 @@
       -webkit-user-select: text !important;
       user-select: text !important;
       -webkit-touch-callout: default !important;
-    }
-
-    .xterm .xterm-viewport {
-      touch-action: pan-y;
-      overscroll-behavior: contain;
-      -webkit-overflow-scrolling: touch;
     }
     
     /* Fix mobile scrolling */
@@ -809,6 +802,7 @@
   .scrollbar-hide::-webkit-scrollbar {
     display: none;
   }
+}
 
 /* Hide markdown backticks in prose content */
 .prose code::before,

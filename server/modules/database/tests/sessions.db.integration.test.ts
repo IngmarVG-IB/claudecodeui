@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
 import { closeConnection } from '@/modules/database/connection.js';
 import { initializeDatabase } from '@/modules/database/init-db.js';
+import { projectsDb } from '@/modules/database/repositories/projects.db.js';
 import { sessionsDb } from '@/modules/database/repositories/sessions.db.js';
 
 async function withIsolatedDatabase(runTest: () => void | Promise<void>): Promise<void> {
@@ -71,6 +72,58 @@ test('createSession reactivates archived rows when the session becomes active ag
   });
 });
 
+test("createSession leaves an archived row archived when the transcript has not changed", async () => {
+  await withIsolatedDatabase(() => {
+    const createdAt = "2026-07-18T09:00:00.000Z";
+    const updatedAt = "2026-07-18T10:00:00.000Z";
+    const jsonlPath = "/transcripts/session-untouched.jsonl";
+
+    sessionsDb.createSession("session-untouched", "claude", "/workspace/demo-project", "A Name", createdAt, updatedAt, jsonlPath);
+    sessionsDb.updateSessionIsArchived("session-untouched", true);
+
+    // A full rescan re-indexes every transcript created since the last scan,
+    // changed or not, and hands over the timestamps the file still carries.
+    sessionsDb.createSession("session-untouched", "claude", "/workspace/demo-project", "A Name", createdAt, updatedAt, jsonlPath);
+
+    assert.equal(sessionsDb.getSessionById("session-untouched")?.isArchived, 1);
+    assert.equal(sessionsDb.getArchivedSessions().length, 1);
+    assert.equal(sessionsDb.getAllSessions().length, 0);
+
+    // Actually writing to the session again still brings it back.
+    sessionsDb.createSession("session-untouched", "claude", "/workspace/demo-project", "A Name", createdAt, "2026-07-18T11:00:00.000Z", jsonlPath);
+
+    assert.equal(sessionsDb.getSessionById("session-untouched")?.isArchived, 0);
+  });
+});
+
+test("the upsert path counts an omitted timestamp as activity", async () => {
+  await withIsolatedDatabase(() => {
+    // An app-created row carries no provider id, so indexing it takes the
+    // INSERT ... ON CONFLICT branch rather than the UPDATE above. Its
+    // updated_at is CURRENT_TIMESTAMP, which resolves to whole seconds, so a
+    // call in the same second is not *newer* -- the omitted timestamp itself
+    // has to be what reactivates the row.
+    sessionsDb.createAppSession("session-legacy", "claude", "/workspace/demo-project");
+    sessionsDb.updateSessionIsArchived("session-legacy", true);
+
+    sessionsDb.createSession("session-legacy", "claude", "/workspace/demo-project", "Indexed Name");
+
+    assert.equal(sessionsDb.getSessionById("session-legacy")?.isArchived, 0);
+  });
+});
+
+test("the upsert path leaves an archived row alone for a transcript older than it", async () => {
+  await withIsolatedDatabase(() => {
+    sessionsDb.createAppSession("session-stale", "claude", "/workspace/demo-project");
+    sessionsDb.updateSessionIsArchived("session-stale", true);
+
+    sessionsDb.createSession("session-stale", "claude", "/workspace/demo-project", "Indexed Name", "2026-07-18T09:00:00.000Z", "2026-07-18T10:00:00.000Z", "/transcripts/session-stale.jsonl");
+
+    assert.equal(sessionsDb.getSessionById("session-stale")?.isArchived, 1);
+  });
+});
+
+
 test('repository reads normalize SQLite UTC timestamps to ISO strings', async () => {
   await withIsolatedDatabase(() => {
     sessionsDb.createAppSession('session-timezone', 'claude', '/workspace/demo-project');
@@ -83,74 +136,33 @@ test('repository reads normalize SQLite UTC timestamps to ISO strings', async ()
   });
 });
 
-test('deleteSessionsWithMissingTranscriptPaths removes ghost rows only for missing transcript files', async () => {
-  await withIsolatedDatabase(async () => {
-    const transcriptDirectory = await mkdtemp(path.join(tmpdir(), 'session-transcripts-'));
-    const existingTranscript = path.join(transcriptDirectory, 'existing.jsonl');
-    const missingTranscript = path.join(transcriptDirectory, 'missing.jsonl');
+test('recent sessions are globally ordered, paginated, and limited to visible conversations', async () => {
+  await withIsolatedDatabase(() => {
+    const fixtures: Array<Parameters<typeof sessionsDb.createSession>> = [
+      ['session-oldest', 'claude', '/workspace/project-a', 'Oldest', '2026-07-18T09:00:00.000Z', '2026-07-18T10:00:00.000Z'],
+      ['session-newest', 'codex', '/workspace/project-b', 'Newest', '2026-07-18T11:00:00.000Z', '2026-07-18T12:00:00.900Z'],
+      ['session-same-second', 'claude', '/workspace/project-a', 'Same second, slightly older', '2026-07-18T12:00:00.000Z', '2026-07-18T12:00:00.100Z'],
+      ['session-middle', 'claude', '/workspace/project-a', 'Middle', '2026-07-18T10:00:00.000Z', '2026-07-18T11:00:00.000Z'],
+      ['session-archived', 'claude', '/workspace/project-a', 'Archived session', '2026-07-18T13:00:00.000Z', '2026-07-18T13:00:00.000Z'],
+      ['session-hidden-project', 'claude', '/workspace/project-hidden', 'Archived project session', '2026-07-18T14:00:00.000Z', '2026-07-18T14:00:00.000Z'],
+    ];
+    fixtures.forEach((fixture) => sessionsDb.createSession(...fixture));
 
-    await writeFile(existingTranscript, '{}\n', 'utf8');
+    sessionsDb.updateSessionIsArchived('session-archived', true);
+    projectsDb.updateProjectIsArchived('/workspace/project-hidden', true);
 
-    sessionsDb.createSession(
-      'session-existing',
-      'claude',
-      '/workspace/demo-project',
-      'Existing Transcript',
-      undefined,
-      undefined,
-      existingTranscript,
+    const firstPage = sessionsDb.getRecentSessionsPage(2, 0);
+    const secondPage = sessionsDb.getRecentSessionsPage(2, 2);
+
+    assert.equal(firstPage.total, 4);
+    assert.deepEqual(
+      firstPage.sessions.map((session) => session.session_id),
+      ['session-newest', 'session-same-second'],
     );
-    sessionsDb.createSession(
-      'session-missing',
-      'claude',
-      '/workspace/demo-project',
-      'Missing Transcript',
-      undefined,
-      undefined,
-      missingTranscript,
+    assert.equal(secondPage.total, 4);
+    assert.deepEqual(
+      secondPage.sessions.map((session) => session.session_id),
+      ['session-middle', 'session-oldest'],
     );
-    sessionsDb.createAppSession('session-pending', 'claude', '/workspace/demo-project');
-
-    const deleted = sessionsDb.deleteSessionsWithMissingTranscriptPaths('claude');
-
-    assert.deepEqual(deleted, ['session-missing']);
-    assert.ok(sessionsDb.getSessionById('session-existing'));
-    assert.equal(sessionsDb.getSessionById('session-missing'), null);
-    assert.ok(sessionsDb.getSessionById('session-pending'));
-
-    await rm(transcriptDirectory, { recursive: true, force: true });
-  });
-});
-
-test('deleteSessionByTranscriptPath removes one provider row for a deleted transcript', async () => {
-  await withIsolatedDatabase(async () => {
-    const transcriptDirectory = await mkdtemp(path.join(tmpdir(), 'session-transcript-delete-'));
-    const transcriptPath = path.join(transcriptDirectory, 'deleted.jsonl');
-
-    sessionsDb.createSession(
-      'session-deleted',
-      'claude',
-      '/workspace/demo-project',
-      'Deleted Transcript',
-      undefined,
-      undefined,
-      transcriptPath,
-    );
-    sessionsDb.createSession(
-      'session-other-provider',
-      'codex',
-      '/workspace/demo-project',
-      'Other Provider',
-      undefined,
-      undefined,
-      transcriptPath,
-    );
-
-    assert.equal(sessionsDb.deleteSessionByTranscriptPath('claude', transcriptPath), 'session-deleted');
-    assert.equal(sessionsDb.getSessionById('session-deleted'), null);
-    assert.ok(sessionsDb.getSessionById('session-other-provider'));
-    assert.equal(sessionsDb.deleteSessionByTranscriptPath('claude', transcriptPath), null);
-
-    await rm(transcriptDirectory, { recursive: true, force: true });
   });
 });

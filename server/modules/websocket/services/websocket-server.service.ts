@@ -16,12 +16,20 @@ type WebSocketServerDependencies = {
   getPluginPort: Parameters<typeof handlePluginWsProxy>[2];
 };
 
-const HEARTBEAT_INTERVAL_MS = 30_000;
-
-export function attachWebSocketHeartbeat(ws: WebSocket, intervalMs = HEARTBEAT_INTERVAL_MS): () => void {
+/**
+ * Used by this module's websocket gateway to keep active transports alive and
+ * close half-open connections so their route-specific clients can reconnect.
+ */
+export function attachWebSocketHeartbeat(
+  ws: WebSocket,
+  intervalMs = 30_000,
+  scheduler = {
+    setInterval,
+    clearInterval,
+  },
+): () => void {
   let isAlive = true;
   let stopped = false;
-  let heartbeat: NodeJS.Timeout;
 
   const markAlive = () => {
     isAlive = true;
@@ -33,20 +41,25 @@ export function attachWebSocketHeartbeat(ws: WebSocket, intervalMs = HEARTBEAT_I
     }
 
     stopped = true;
-    clearInterval(heartbeat);
+    scheduler.clearInterval(heartbeat);
     ws.off('pong', markAlive);
     ws.off('close', stopHeartbeat);
     ws.off('error', stopHeartbeat);
   };
 
   ws.on('pong', markAlive);
+  ws.on('close', stopHeartbeat);
+  ws.on('error', stopHeartbeat);
 
-  heartbeat = setInterval(() => {
+  const heartbeat = scheduler.setInterval(() => {
     if (ws.readyState !== WebSocket.OPEN) {
       return;
     }
 
+    // A socket that did not answer the previous ping is half-open from the
+    // server's perspective. Terminating it emits close and lets clients resume.
     if (!isAlive) {
+      stopHeartbeat();
       ws.terminate();
       return;
     }
@@ -55,20 +68,17 @@ export function attachWebSocketHeartbeat(ws: WebSocket, intervalMs = HEARTBEAT_I
     try {
       ws.ping();
     } catch {
+      stopHeartbeat();
       ws.terminate();
     }
   }, intervalMs);
-  heartbeat.unref();
-
-  ws.on('close', stopHeartbeat);
-  ws.on('error', stopHeartbeat);
 
   return stopHeartbeat;
 }
 
 /**
  * Creates and wires the server-wide websocket gateway used for chat, shell, and
- * plugin proxy routes.
+ * plugin proxy routes. Exported through the websocket module for server startup.
  */
 export function createWebSocketServer(
   server: HttpServer,
@@ -85,14 +95,6 @@ export function createWebSocketServer(
     attachWebSocketHeartbeat(ws);
 
     const incomingRequest = request as AuthenticatedWebSocketRequest;
-    if (incomingRequest.refreshedToken && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({
-        kind: 'auth_refresh',
-        token: incomingRequest.refreshedToken,
-        timestamp: new Date().toISOString(),
-      }));
-    }
-
     const url = incomingRequest.url ?? '/';
     const pathname = new URL(url, 'http://localhost').pathname;
 
@@ -112,7 +114,7 @@ export function createWebSocketServer(
     }
 
     if (pathname.startsWith('/plugin-ws/')) {
-      handlePluginWsProxy(ws, pathname, dependencies.getPluginPort, incomingRequest.user);
+      handlePluginWsProxy(ws, pathname, dependencies.getPluginPort);
       return;
     }
 

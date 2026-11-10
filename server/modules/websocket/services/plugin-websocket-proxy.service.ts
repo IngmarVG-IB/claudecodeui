@@ -1,16 +1,12 @@
 import { WebSocket } from 'ws';
 
-import { buildPluginIdentityHeaders } from '@/modules/plugins/index.js';
-import type { AuthenticatedWebSocketUser } from '@/shared/types.js';
-
 /**
  * Proxies an authenticated client websocket to a plugin websocket endpoint.
  */
 export function handlePluginWsProxy(
   clientWs: WebSocket,
   pathname: string,
-  getPluginPort: (pluginName: string) => number | null,
-  user?: AuthenticatedWebSocketUser
+  getPluginPort: (pluginName: string) => number | null
 ): void {
   const pluginName = pathname.replace('/plugin-ws/', '');
   if (!pluginName || /[^a-zA-Z0-9_-]/.test(pluginName)) {
@@ -24,9 +20,7 @@ export function handlePluginWsProxy(
     return;
   }
 
-  const upstream = new WebSocket(`ws://127.0.0.1:${port}/ws`, {
-    headers: buildPluginIdentityHeaders(pluginName, user),
-  });
+  const upstream = new WebSocket(`ws://127.0.0.1:${port}/ws`);
 
   upstream.on('open', () => {
     console.log(`[Plugins] WS proxy connected to "${pluginName}" on port ${port}`);

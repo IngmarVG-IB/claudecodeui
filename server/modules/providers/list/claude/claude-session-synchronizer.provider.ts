@@ -12,31 +12,11 @@ import {
 } from '@/shared/utils.js';
 import type { IProviderSessionSynchronizer } from '@/shared/interfaces.js';
 
-const CLAUDE_UNTITLED_SESSION_NAME = 'Untitled Claude Session';
-const CLAUDE_INTERNAL_TRANSCRIPT_DIRS = new Set(['subagents', 'tool-results']);
-
 type ParsedSession = {
   sessionId: string;
   projectPath: string;
   sessionName?: string;
 };
-
-function isMeaningfulClaudeTitle(value: unknown): value is string {
-  if (typeof value !== 'string') {
-    return false;
-  }
-
-  const trimmed = value.trim();
-  if (!trimmed || trimmed === CLAUDE_UNTITLED_SESSION_NAME) {
-    return false;
-  }
-
-  if (trimmed.length > 120) {
-    return false;
-  }
-
-  return !/^(?:[-*]\s*)?(?:\*\*)?user['’]?s message(?:\*\*)?\s*:/i.test(trimmed);
-}
 
 /**
  * Session indexer for Claude transcript artifacts.
@@ -46,20 +26,20 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
   private readonly claudeHome = path.join(os.homedir(), '.claude');
 
   /**
-   * Returns true when a JSONL file is a subagent transcript rather than a
-   * top-level session.
+   * Returns true when a JSONL file is a subagent transcript or tool result
+   * rather than a top-level session.
    *
-   * Claude stores subagent transcripts under a `subagents/` directory, e.g.
+   * Claude stores subagent transcripts under a `subagents/` directory and
+   * tool results under a `tool-results/` directory, e.g.
    * `~/.claude/projects/<encoded-cwd>/<session-id>/subagents/agent-<id>.jsonl`.
    * Those files repeat the parent session's `sessionId`, so indexing them as
    * standalone sessions overwrites the parent row's `jsonl_path` and corrupts
    * the main session record. The recursive scan in `synchronize()` reaches
    * them, so both entry points must skip them.
    */
-  private isInternalTranscript(filePath: string): boolean {
-    return path.normalize(filePath)
-      .split(path.sep)
-      .some((part) => CLAUDE_INTERNAL_TRANSCRIPT_DIRS.has(part));
+  private isSubagentTranscript(filePath: string): boolean {
+    const pathParts = path.normalize(filePath).split(path.sep);
+    return pathParts.includes('subagents') || pathParts.includes('tool-results');
   }
 
   /**
@@ -70,14 +50,12 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
     const files = await findFilesRecursivelyCreatedAfter(
       path.join(this.claudeHome, 'projects'),
       '.jsonl',
-      since ?? null,
-      [],
-      CLAUDE_INTERNAL_TRANSCRIPT_DIRS
+      since ?? null
     );
 
     let processed = 0;
     for (const filePath of files) {
-      if (this.isInternalTranscript(filePath)) {
+      if (this.isSubagentTranscript(filePath)) {
         continue;
       }
 
@@ -109,7 +87,7 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
     if (!filePath.endsWith('.jsonl')) {
       return null;
     }
-    if (this.isInternalTranscript(filePath)) {
+    if (this.isSubagentTranscript(filePath)) {
       return null;
     }
 
@@ -162,25 +140,35 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
     const existingSession = sessionsDb.getSessionByProviderSessionId(parsed.sessionId)
       ?? sessionsDb.getSessionById(parsed.sessionId);
     const existingSessionName = existingSession?.custom_name;
-    if (isMeaningfulClaudeTitle(existingSessionName)) {
+    if (existingSessionName && existingSessionName !== 'Untitled Claude Session') {
       return {
         ...parsed,
-        sessionName: normalizeSessionName(existingSessionName, CLAUDE_UNTITLED_SESSION_NAME),
+        sessionName: normalizeSessionName(existingSessionName, 'Untitled Claude Session'),
       };
     }
 
-    let sessionName = nameMap.get(parsed.sessionId);
+    let sessionName = await this.extractSessionTitle(filePath, parsed.sessionId);
     if (!sessionName) {
-      sessionName = await this.extractSessionAiTitleFromEnd(filePath, parsed.sessionId);
+      sessionName = nameMap.get(parsed.sessionId);
     }
 
     return {
       ...parsed,
-      sessionName: normalizeSessionName(sessionName, CLAUDE_UNTITLED_SESSION_NAME),
+      sessionName: normalizeSessionName(sessionName, 'Untitled Claude Session'),
     };
   }
 
-  private async extractSessionAiTitleFromEnd(
+  /**
+   * Returns the best available title for one session from its transcript.
+   *
+   * Scans forward keeping the last match of each event type, then prefers
+   * `custom-title` (a manual `/rename`) over `ai-title` over `last-prompt`.
+   * Claude writes `custom-title` immediately before `ai-title`, so a reverse
+   * scan that returns its first hit would always lose the manual rename.
+   *
+   * Returns undefined on a missing or unreadable file so sync can continue.
+   */
+  private async extractSessionTitle(
     filePath: string,
     sessionId: string
   ): Promise<string | undefined> {
@@ -188,7 +176,11 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
       const content = await readFile(filePath, 'utf8');
       const lines = content.split(/\r?\n/);
 
-      for (let index = lines.length - 1; index >= 0; index -= 1) {
+      let foundCustomTitle: string | undefined;
+      let foundAiTitle: string | undefined;
+      let foundLastPrompt: string | undefined;
+
+      for (let index = 0; index < lines.length; index += 1) {
         const line = lines[index]?.trim();
         if (!line) {
           continue;
@@ -204,21 +196,30 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
         const data = parsed as Record<string, unknown>;
         const eventType = typeof data.type === 'string' ? data.type : undefined;
         const eventSessionId = typeof data.sessionId === 'string' ? data.sessionId : undefined;
-        const aiTitle = typeof data.aiTitle === 'string' ? data.aiTitle : undefined;
-        const claudeRenamedTitle = typeof data.customTitle === 'string' ? data.customTitle : undefined;
 
         if (eventSessionId !== sessionId) {
           continue;
         }
 
-        if (eventType === 'ai-title' && isMeaningfulClaudeTitle(aiTitle)) {
-          return aiTitle;
-        }
-
-        if (eventType === 'custom-title' && isMeaningfulClaudeTitle(claudeRenamedTitle)) {
-          return claudeRenamedTitle;
+        if (eventType === 'custom-title') {
+          const title = typeof data.customTitle === 'string' ? data.customTitle : undefined;
+          if (title?.trim()) {
+            foundCustomTitle = title;
+          }
+        } else if (eventType === 'ai-title') {
+          const title = typeof data.aiTitle === 'string' ? data.aiTitle : undefined;
+          if (title?.trim()) {
+            foundAiTitle = title;
+          }
+        } else if (eventType === 'last-prompt') {
+          const prompt = typeof data.lastPrompt === 'string' ? data.lastPrompt : undefined;
+          if (prompt?.trim()) {
+            foundLastPrompt = prompt;
+          }
         }
       }
+
+      return foundCustomTitle || foundAiTitle || foundLastPrompt;
     } catch {
       // Ignore missing/unreadable files so sync can continue.
     }

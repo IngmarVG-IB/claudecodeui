@@ -5,12 +5,12 @@ import { readFile } from 'node:fs/promises';
 import { sessionsDb } from '@/modules/database/index.js';
 import {
   buildLookupMap,
+  extractFirstValidJsonlData,
   findFilesRecursivelyCreatedAfter,
   normalizeSessionName,
   readFileTimestamps,
 } from '@/shared/utils.js';
 import type { IProviderSessionSynchronizer } from '@/shared/interfaces.js';
-import { isCodexSubagentTranscript, readCodexTranscriptMeta } from './codex-transcripts.js';
 
 type ParsedSession = {
   sessionId: string;
@@ -76,10 +76,6 @@ export class CodexSessionSynchronizer implements IProviderSessionSynchronizer {
       return null;
     }
 
-    if (await isCodexSubagentTranscript(filePath)) {
-      return null;
-    }
-
     const nameMap = await buildLookupMap(path.join(this.codexHome, 'session_index.jsonl'), 'id', 'thread_name');
     const parsed = await this.processSessionFile(filePath, nameMap);
     if (!parsed) {
@@ -105,18 +101,35 @@ export class CodexSessionSynchronizer implements IProviderSessionSynchronizer {
     filePath: string,
     nameMap: Map<string, string>
   ): Promise<ParsedSession | null> {
-    // Codex >=0.144 sub-agent rollouts (spawn_agent, review, compact) live in
-    // the same sessions tree as user sessions and must stay out of the sidebar.
-    // Top-level sessions carry thread_source "user"; sub-agents carry
-    // thread_source "subagent" or a source object keyed by "subagent".
-    const meta = await readCodexTranscriptMeta(filePath);
-    if (!meta || meta.threadSource === 'subagent' || meta.hasSubagentSource) {
+    const parsed = await extractFirstValidJsonlData(filePath, (rawData) => {
+      const data = rawData as Record<string, unknown>;
+      const payload = data.payload as Record<string, unknown> | undefined;
+      const sessionId = typeof payload?.id === 'string' ? payload.id : undefined;
+      const projectPath = typeof payload?.cwd === 'string' ? payload.cwd : undefined;
+
+      if (!sessionId || !projectPath) {
+        return null;
+      }
+
+      return {
+        sessionId,
+        projectPath,
+        isSubagent: payload ? this.isSubagentSessionMeta(payload) : false,
+      };
+    });
+
+    if (!parsed || parsed.isSubagent) {
       return null;
     }
-    const parsed = {
-      sessionId: meta.sessionId,
-      projectPath: meta.projectPath,
-    };
+
+    // A thread a session was edited off is left on disk on purpose, but it is
+    // nobody's conversation any more. Re-indexing it would add a sidebar entry
+    // for the version the user edited away from — and for a session that was
+    // itself discovered from disk, whose app id is its original thread id, it
+    // would hand the row back to that thread.
+    if (sessionsDb.isProviderSessionSuperseded(parsed.sessionId, this.provider)) {
+      return null;
+    }
 
     // App-created sessions are keyed by an app id, so disk-discovered provider
     // ids must be resolved through the provider-id mapping first.
@@ -139,6 +152,25 @@ export class CodexSessionSynchronizer implements IProviderSessionSynchronizer {
       ...parsed,
       sessionName: normalizeSessionName(sessionName, 'Untitled Codex Session'),
     };
+  }
+
+  /**
+   * Returns true when a session_meta payload belongs to a Codex sub-agent
+   * thread (Codex >=0.144 collaboration spawn_agent, review, compact, etc.).
+   * Sub-agent rollouts live in the same sessions tree as user sessions, so
+   * they must be skipped here to stay out of the sidebar — the Codex
+   * equivalent of the Claude synchronizer's subagent transcript skip.
+   * Top-level sessions carry thread_source "user" and a string source
+   * ("exec"/"cli"); sub-agents carry thread_source "subagent" and an object
+   * source keyed by "subagent".
+   */
+  private isSubagentSessionMeta(payload: Record<string, unknown>): boolean {
+    if (payload.thread_source === 'subagent') {
+      return true;
+    }
+
+    const source = payload.source;
+    return typeof source === 'object' && source !== null && 'subagent' in source;
   }
 
   private async extractLastAgentMessageFromEnd(filePath: string): Promise<string | undefined> {

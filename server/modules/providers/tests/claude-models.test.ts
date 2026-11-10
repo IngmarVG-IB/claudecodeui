@@ -1,70 +1,87 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import {
-  ClaudeProviderModels,
-  findClaudeModelOption,
-  normalizeClaudeModelValue,
-} from '@/modules/providers/list/claude/claude-models.provider.js';
+import { extractClaudeEventModel } from '@/modules/providers/list/claude/claude-models.provider.js';
 
-test('Claude models provider merges custom model list from environment', async () => {
-  const previousModels = process.env.CLOUDCLI_CLAUDE_MODELS;
-  const previousDefault = process.env.CLOUDCLI_CLAUDE_DEFAULT_MODEL;
+const SESSION_ID = 'session-1';
 
-  try {
-    process.env.CLOUDCLI_CLAUDE_MODELS = JSON.stringify([
-      {
-        value: 'gateway/claude-custom',
-        label: 'Gateway Claude Custom',
-        description: 'Custom gateway model',
-      },
-    ]);
-    process.env.CLOUDCLI_CLAUDE_DEFAULT_MODEL = 'gateway/claude-custom';
-
-    const provider = new ClaudeProviderModels();
-    const models = await provider.getSupportedModels();
-
-    assert.ok(models.OPTIONS.some((option) => option.value === 'default'));
-    assert.deepEqual(
-      models.OPTIONS.find((option) => option.value === 'gateway/claude-custom'),
-      {
-        value: 'gateway/claude-custom',
-        label: 'Gateway Claude Custom',
-        description: 'Custom gateway model',
-      },
-    );
-    assert.equal(models.DEFAULT, 'gateway/claude-custom');
-  } finally {
-    if (previousModels === undefined) {
-      delete process.env.CLOUDCLI_CLAUDE_MODELS;
-    } else {
-      process.env.CLOUDCLI_CLAUDE_MODELS = previousModels;
-    }
-
-    if (previousDefault === undefined) {
-      delete process.env.CLOUDCLI_CLAUDE_DEFAULT_MODEL;
-    } else {
-      process.env.CLOUDCLI_CLAUDE_DEFAULT_MODEL = previousDefault;
-    }
-  }
+test('ignores the <synthetic> placeholder Claude Code stamps on synthesized rows', () => {
+  assert.equal(
+    extractClaudeEventModel(
+      { sessionId: SESSION_ID, message: { model: '<synthetic>' } },
+      SESSION_ID,
+    ),
+    null,
+  );
+  assert.equal(
+    extractClaudeEventModel({ sessionId: SESSION_ID, model: '<synthetic>' }, SESSION_ID),
+    null,
+  );
 });
 
-test('Claude model helpers normalize stale concrete Claude model ids', async () => {
-  const previousDefault = process.env.CLOUDCLI_CLAUDE_DEFAULT_MODEL;
+test('still surfaces real model ids from message and event fields', () => {
+  assert.equal(
+    extractClaudeEventModel(
+      { sessionId: SESSION_ID, message: { model: 'claude-sonnet-5' } },
+      SESSION_ID,
+    ),
+    'claude-sonnet-5',
+  );
+  assert.equal(
+    extractClaudeEventModel({ sessionId: SESSION_ID, model: 'opus' }, SESSION_ID),
+    'opus',
+  );
+});
 
-  try {
-    process.env.CLOUDCLI_CLAUDE_DEFAULT_MODEL = 'claude-opus-4-8';
-    const provider = new ClaudeProviderModels();
-    const models = await provider.getSupportedModels();
+test('skips a placeholder content part so a later real model tag still wins', () => {
+  assert.equal(
+    extractClaudeEventModel(
+      {
+        sessionId: SESSION_ID,
+        message: {
+          content: [
+            { text: '<model><synthetic></model>' },
+            { text: '<model>claude-sonnet-5</model>' },
+          ],
+        },
+      },
+      SESSION_ID,
+    ),
+    'claude-sonnet-5',
+  );
+});
 
-    assert.equal(normalizeClaudeModelValue('claude-opus-4-8'), 'opus');
-    assert.equal(findClaudeModelOption('claude-opus-4-8')?.value, 'opus');
-    assert.equal(models.DEFAULT, 'opus');
-  } finally {
-    if (previousDefault === undefined) {
-      delete process.env.CLOUDCLI_CLAUDE_DEFAULT_MODEL;
-    } else {
-      process.env.CLOUDCLI_CLAUDE_DEFAULT_MODEL = previousDefault;
-    }
-  }
+test('a placeholder stdout hit does not shadow a real <model> tag in the same text', () => {
+  const text = '<local-command-stdout>Set model to <synthetic></local-command-stdout>'
+    + '<model>claude-sonnet-5</model>';
+  assert.equal(
+    extractClaudeEventModel(
+      { sessionId: SESSION_ID, message: { content: text } },
+      SESSION_ID,
+    ),
+    'claude-sonnet-5',
+  );
+  assert.equal(
+    extractClaudeEventModel(
+      { sessionId: SESSION_ID, message: { content: [{ text }] } },
+      SESSION_ID,
+    ),
+    'claude-sonnet-5',
+  );
+});
+
+test('falls back to the message model when every content hit is a placeholder', () => {
+  assert.equal(
+    extractClaudeEventModel(
+      {
+        sessionId: SESSION_ID,
+        message: {
+          content: '<model><synthetic></model>',
+          model: 'claude-sonnet-5',
+        },
+      },
+      SESSION_ID,
+    ),
+    'claude-sonnet-5',
+  );
 });

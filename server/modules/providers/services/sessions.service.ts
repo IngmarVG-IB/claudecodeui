@@ -3,26 +3,51 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 
 import { projectsDb, sessionsDb } from '@/modules/database/index.js';
-import { chatRunRegistry } from '@/modules/websocket/index.js';
+import { broadcastSessionUpserted, chatRunRegistry } from '@/modules/websocket/index.js';
 import { providerRegistry } from '@/modules/providers/provider.registry.js';
+import { listBusyClaudeCliSessions } from '@/modules/providers/services/claude-cli-liveness.service.js';
+import { sessionHistoryCache } from '@/modules/providers/services/session-history-cache.service.js';
 import type {
+  BackgroundTaskSummary,
   FetchHistoryOptions,
   FetchHistoryResult,
   LLMProvider,
   NormalizedMessage,
+  WorkflowAgentActivity,
 } from '@/shared/types.js';
-import { AppError } from '@/shared/utils.js';
+import { AppError, sliceTailPage } from '@/shared/utils.js';
+
+/**
+ * One session the running-sessions poll reports as busy.
+ *
+ * A chat run in progress is listed as before. A session whose turn has ended
+ * but whose background tasks are still outstanding is listed with
+ * `background: true` and `canInterrupt: false`: the composer stays usable
+ * (the runtime accepts a new turn while the work runs) and there is no run to
+ * abort — a task is stopped by id through `chat.stop-task` instead. `tasks`
+ * rides along on both kinds whenever the session has any.
+ *
+ * A turn driven outside CloudCLI — the Claude CLI in the Shell view, or a
+ * terminal the user opened themselves — is listed the same way, with
+ * `canInterrupt: false` because there is no run here to abort, and a
+ * `statusText` saying where the work is happening.
+ */
+type RunningSessionEntry = {
+  sessionId: string;
+  provider: LLMProvider;
+  startedAt: number;
+  lastSeq: number;
+  background?: true;
+  canInterrupt?: false;
+  statusText?: string;
+  tasks?: BackgroundTaskSummary[];
+};
 
 type CreateAppSessionResult = {
   sessionId: string;
   provider: LLMProvider;
   projectPath: string;
-};
-
-type BranchSessionResult = CreateAppSessionResult & {
-  sourceSessionId: string;
-  title: string;
-  copiedHistory: boolean;
+  sessionName: string;
 };
 
 type ArchivedSessionListItem = {
@@ -38,6 +63,43 @@ type ArchivedSessionListItem = {
   isProjectArchived: boolean;
 };
 
+type RecentSessionListItem = Pick<
+  ArchivedSessionListItem,
+  'sessionId' | 'provider' | 'projectId' | 'projectDisplayName' | 'sessionTitle' | 'lastActivity'
+>;
+
+type RecentSessionsPage = {
+  conversations: RecentSessionListItem[];
+  total: number;
+  hasMore: boolean;
+};
+
+type SessionDetails = {
+  /** Canonical app-facing session id (may differ from the looked-up id when a provider-native id was given). */
+  sessionId: string;
+  provider: LLMProvider;
+  summary: string;
+  createdAt: string | null;
+  updatedAt: string | null;
+  lastActivity: string | null;
+  isArchived: boolean;
+  project: {
+    projectId: string;
+    path: string;
+    fullPath: string;
+    displayName: string;
+    isStarred: boolean;
+    isArchived: boolean;
+  } | null;
+};
+
+const MAX_CLOUDCLI_SESSION_NAME_WORDS = 4;
+
+function buildCloudCliSessionName(initialMessage: string): string {
+  const words = initialMessage.trim().split(/\s+/).filter(Boolean);
+  return words.slice(0, MAX_CLOUDCLI_SESSION_NAME_WORDS).join(' ') || 'Untitled Session';
+}
+
 /**
  * Removes one file if it exists.
  */
@@ -52,49 +114,6 @@ async function removeFileIfExists(filePath: string): Promise<boolean> {
     }
     throw error;
   }
-}
-
-function replaceSessionIdsInTranscript(content: string, sourceProviderSessionId: string, targetProviderSessionId: string): string {
-  return content
-    .split(/\r?\n/)
-    .map((line) => {
-      if (!line.trim()) {
-        return line;
-      }
-
-      try {
-        const parsed = JSON.parse(line) as Record<string, unknown>;
-        if (parsed.sessionId === sourceProviderSessionId) {
-          parsed.sessionId = targetProviderSessionId;
-        }
-        if (parsed.session_id === sourceProviderSessionId) {
-          parsed.session_id = targetProviderSessionId;
-        }
-        return JSON.stringify(parsed);
-      } catch {
-        return line;
-      }
-    })
-    .join('\n');
-}
-
-async function copySessionTranscriptForBranch(
-  sourceJsonlPath: string | null,
-  sourceProviderSessionId: string,
-  targetProviderSessionId: string,
-): Promise<string | null> {
-  if (!sourceJsonlPath) {
-    return null;
-  }
-
-  const targetJsonlPath = path.join(path.dirname(sourceJsonlPath), `${targetProviderSessionId}.jsonl`);
-  const content = await fsp.readFile(sourceJsonlPath, 'utf8');
-  await fsp.writeFile(
-    targetJsonlPath,
-    replaceSessionIdsInTranscript(content, sourceProviderSessionId, targetProviderSessionId),
-    { flag: 'wx' },
-  );
-  return targetJsonlPath;
 }
 
 /**
@@ -135,18 +154,112 @@ export const sessionsService = {
   },
 
   /**
-   * Returns app-facing ids for provider runs that are currently processing.
+   * Returns app-facing ids for provider runs that are currently processing,
+   * plus every session whose background work outlived its turn.
    *
    * This is intentionally status-only: callers that only need sidebar activity
    * indicators should not attach to chat streams or request replayed messages.
    */
-  listRunningSessions(): Array<{
-    sessionId: string;
-    provider: LLMProvider;
-    startedAt: number;
-    lastSeq: number;
-  }> {
-    return chatRunRegistry.listRunningRuns();
+  async listRunningSessions(): Promise<RunningSessionEntry[]> {
+    const entries: RunningSessionEntry[] = chatRunRegistry.listRunningRuns();
+    const runningById = new Map(entries.map((entry) => [entry.sessionId, entry]));
+
+    for (const provider of providerRegistry.listProviders()) {
+      for (const { sessionId, tasks } of provider.runtime.listBackgroundWork?.() ?? []) {
+        const running = runningById.get(sessionId);
+        if (running) {
+          running.tasks = tasks;
+          continue;
+        }
+        entries.push({
+          sessionId,
+          provider: provider.id,
+          startedAt: Math.min(...tasks.map((task) => task.startedAt)),
+          // The completed run stays in the registry for a while, and a client
+          // that subscribes with its lastSeq replays the tail it missed.
+          lastSeq: chatRunRegistry.getRun(sessionId)?.lastSeq ?? 0,
+          background: true,
+          canInterrupt: false,
+          tasks,
+        });
+      }
+    }
+
+    // The chat-run registry only knows about turns CloudCLI drives itself, so
+    // without this a session working under the Claude CLI — including one
+    // CloudCLI spawned for its own Shell view — looks idle. A session already
+    // listed above keeps its richer entry.
+    for (const live of await listBusyClaudeCliSessions()) {
+      const session = sessionsDb.getSessionByProviderSessionId(live.providerSessionId);
+      if (!session || runningById.has(session.session_id)) {
+        continue;
+      }
+
+      entries.push({
+        sessionId: session.session_id,
+        provider: session.provider as LLMProvider,
+        startedAt: live.startedAt,
+        lastSeq: chatRunRegistry.getRun(session.session_id)?.lastSeq ?? 0,
+        // There is no run here to abort: the turn belongs to a CLI process
+        // CloudCLI does not own, so it can be reported but not interrupted.
+        canInterrupt: false,
+        statusText: 'Running in the Claude CLI',
+      });
+      runningById.set(session.session_id, entries[entries.length - 1]);
+    }
+
+    return entries;
+  },
+
+  /**
+   * Returns the active conversation feed in true global activity order.
+   */
+  listRecentSessions(limit: number, offset: number): RecentSessionsPage {
+    const page = sessionsDb.getRecentSessionsPage(limit, offset);
+    const projectCache = new Map<string, ReturnType<typeof projectsDb.getProjectPath>>();
+    const conversations = page.sessions.map((session) => {
+      const projectPath = session.project_path?.trim() ? session.project_path : null;
+      let project = null;
+
+      if (projectPath) {
+        if (!projectCache.has(projectPath)) {
+          projectCache.set(projectPath, projectsDb.getProjectPath(projectPath));
+        }
+        project = projectCache.get(projectPath) ?? null;
+      }
+
+      return {
+        sessionId: session.session_id,
+        provider: session.provider as LLMProvider,
+        projectId: project?.project_id ?? null,
+        projectDisplayName: resolveProjectDisplayName(projectPath, project?.custom_project_name),
+        sessionTitle: session.custom_name?.trim() || session.session_id,
+        lastActivity: session.updated_at ?? session.created_at ?? null,
+      };
+    });
+
+    return {
+      conversations,
+      total: page.total,
+      hasMore: offset + conversations.length < page.total,
+    };
+  },
+
+  /**
+   * Resolves the provider-native session id a runtime needs for resume.
+   *
+   * Callers hand provider runtimes the stable app session id; the provider
+   * CLIs/SDKs only understand their own native id, which lives on the session
+   * row. Ids without a row are assumed to be provider-native already (direct
+   * API callers that reference sessions the watcher has not indexed yet).
+   */
+  resolveProviderSessionId(sessionId: string | null | undefined): string | null {
+    if (!sessionId) {
+      return null;
+    }
+
+    const session = sessionsDb.getSessionById(sessionId);
+    return session ? session.provider_session_id : sessionId;
   },
 
   /**
@@ -167,9 +280,15 @@ export const sessionsService = {
    * (via `POST /api/providers/sessions`) when the user starts a brand-new
    * chat, navigates to the returned id immediately, and the id never changes
    * for the lifetime of the conversation. The provider-native id is mapped to
-   * this row later, when the provider runtime announces it mid-run.
+   * this row later, when the provider runtime announces it mid-run. Its title
+   * comes directly from the first visible CloudCLI message and is limited to
+   * four whole words before any provider-owned storage exists.
    */
-  createAppSession(provider: LLMProvider, projectPath: string): CreateAppSessionResult {
+  createAppSession(
+    provider: LLMProvider,
+    projectPath: string,
+    initialMessage: string,
+  ): CreateAppSessionResult {
     const normalizedProjectPath = projectPath.trim();
     if (!normalizedProjectPath) {
       throw new AppError('projectPath is required.', {
@@ -179,72 +298,111 @@ export const sessionsService = {
     }
 
     const sessionId = randomUUID();
-    sessionsDb.createAppSession(sessionId, provider, normalizedProjectPath);
+    const sessionName = buildCloudCliSessionName(initialMessage);
+    sessionsDb.createAppSession(sessionId, provider, normalizedProjectPath, sessionName);
 
     return {
       sessionId,
       provider,
       projectPath: normalizedProjectPath,
+      sessionName,
     };
   },
 
-  async branchSessionById(sourceSessionId: string): Promise<BranchSessionResult> {
-    const sourceSession = sessionsDb.getSessionById(sourceSessionId);
-    if (!sourceSession) {
-      throw new AppError(`Session "${sourceSessionId}" was not found.`, {
+  /**
+   * Branches a session into an independent one containing its conversation up
+   * to `upToAnchorId` (the whole thing when omitted).
+   *
+   * The source is left completely untouched — this is the "try two approaches"
+   * action, not a destructive one.
+   */
+  async forkSessionById(
+    sessionId: string,
+    options: { upToAnchorId?: string; title?: string } = {},
+  ): Promise<CreateAppSessionResult> {
+    const source = sessionsDb.getSessionById(sessionId);
+    if (!source) {
+      throw new AppError(`Session "${sessionId}" was not found.`, {
         code: 'SESSION_NOT_FOUND',
         statusCode: 404,
       });
     }
 
-    const provider = sourceSession.provider as LLMProvider;
-    const projectPath = sourceSession.project_path?.trim();
-    if (!projectPath) {
-      throw new AppError(`Session "${sourceSessionId}" has no project path.`, {
-        code: 'SESSION_PROJECT_PATH_MISSING',
+    const provider = source.provider as LLMProvider;
+    const fork = providerRegistry.resolveProvider(provider).fork;
+    if (!fork) {
+      throw new AppError(`Sessions cannot be forked for provider "${provider}".`, {
+        code: 'FORK_NOT_SUPPORTED',
         statusCode: 409,
       });
     }
 
-    const sessionId = randomUUID();
-    const sourceProviderSessionId = sourceSession.provider_session_id || sourceSession.session_id;
-    const sourceTitle = sourceSession.custom_name?.trim() || sourceSession.session_id;
-    const title = `Branch of ${sourceTitle}`;
-    let copiedHistory = false;
-
-    if (sourceSession.jsonl_path) {
-      const copiedJsonlPath = await copySessionTranscriptForBranch(
-        sourceSession.jsonl_path,
-        sourceProviderSessionId,
-        sessionId,
-      );
-      if (copiedJsonlPath) {
-        sessionsDb.createSession(
-          sessionId,
-          provider,
-          projectPath,
-          title,
-          undefined,
-          undefined,
-          copiedJsonlPath,
-        );
-        copiedHistory = true;
-      }
+    // A session that has never run has no transcript to copy, so there is
+    // nothing a fork of it could resume from.
+    if (!source.provider_session_id || !source.jsonl_path) {
+      throw new AppError('This session has not produced a transcript yet.', {
+        code: 'FORK_SOURCE_NOT_READY',
+        statusCode: 409,
+      });
     }
 
-    if (!copiedHistory) {
-      sessionsDb.createAppSession(sessionId, provider, projectPath);
-      sessionsDb.updateSessionCustomName(sessionId, title);
-    }
+    const sessionName = options.title?.trim()
+      || `${source.custom_name?.trim() || 'Session'} (fork)`;
+
+    const forked = await fork.forkSession({
+      providerSessionId: source.provider_session_id,
+      jsonlPath: source.jsonl_path,
+      projectPath: source.project_path ?? '',
+      upToAnchorId: options.upToAnchorId,
+      title: sessionName,
+    });
+
+    const forkSessionId = randomUUID();
+    sessionsDb.createForkedSession({
+      sessionId: forkSessionId,
+      provider,
+      projectPath: source.project_path ?? '',
+      customName: sessionName,
+      providerSessionId: forked.providerSessionId,
+      jsonlPath: forked.jsonlPath,
+      forkedFromSessionId: sessionId,
+      // A fork that silently dropped to the catalog default would answer
+      // differently from the conversation it was branched from.
+      model: source.model,
+      effort: source.effort,
+    });
+
+    await broadcastSessionUpserted(forkSessionId);
 
     return {
-      sessionId,
-      sourceSessionId,
+      sessionId: forkSessionId,
       provider,
-      projectPath,
-      title,
-      copiedHistory,
+      projectPath: source.project_path ?? '',
+      sessionName,
     };
+  },
+
+  /**
+   * Resolves the provider-native id only for an explicit user copy action.
+   * Normal session payloads continue to expose only the stable app id.
+   */
+  getProviderSessionId(sessionId: string): string {
+    const session = sessionsDb.getSessionById(sessionId);
+    if (!session) {
+      throw new AppError(`Session "${sessionId}" was not found.`, {
+        code: 'SESSION_NOT_FOUND',
+        statusCode: 404,
+      });
+    }
+
+    if (!session.provider_session_id) {
+      throw new AppError('This session ID is not available yet.', {
+        code: 'PROVIDER_SESSION_ID_NOT_AVAILABLE',
+        statusCode: 409,
+      });
+    }
+
+    return session.provider_session_id;
   },
 
   /**
@@ -256,6 +414,73 @@ export const sessionsService = {
    * and every returned message is remapped back to the app session id so
    * provider ids never reach the frontend.
    */
+  /**
+   * Resolves where a conversation must resume from so that one already-sent
+   * message, and everything after it, is replaced.
+   *
+   * Returns `null` when the provider cannot do this at all, which is how the
+   * chat gateway knows to refuse the request rather than silently sending the
+   * edit as a new message at the end of the conversation.
+   */
+  async resolveEditAnchor(
+    sessionId: string,
+    anchorId: string,
+  ): Promise<{ found: boolean; resumeThroughId: string | null } | null> {
+    const session = sessionsDb.getSessionById(sessionId);
+    if (!session) {
+      throw new AppError(`Session "${sessionId}" was not found.`, {
+        code: 'SESSION_NOT_FOUND',
+        statusCode: 404,
+      });
+    }
+
+    const sessions = providerRegistry.resolveProvider(session.provider as LLMProvider).sessions;
+    if (!sessions.resolveEditAnchor) {
+      return null;
+    }
+
+    return sessions.resolveEditAnchor(sessionId, anchorId);
+  },
+
+  /**
+   * Whether editing a message on this session's provider means rewinding it on
+   * disk first, rather than handing the anchor to the runtime as a resume
+   * option.
+   *
+   * Answering this without doing anything is the point: the rewind moves the
+   * session onto a different provider transcript and cannot be undone, so the
+   * gateway has to know which shape the run takes before it commits to one.
+   */
+  providerRewindsForEdit(sessionId: string): boolean {
+    const session = sessionsDb.getSessionById(sessionId);
+    if (!session) {
+      throw new AppError(`Session "${sessionId}" was not found.`, {
+        code: 'SESSION_NOT_FOUND',
+        statusCode: 404,
+      });
+    }
+
+    return Boolean(providerRegistry.resolveProvider(session.provider as LLMProvider).sessions.rewindSession);
+  },
+
+  /**
+   * Rewinds a session on disk so `keepThroughId` is the last row it holds.
+   *
+   * Only call this once the run is admitted — see `providerRewindsForEdit`.
+   */
+  async rewindSessionForEdit(sessionId: string, keepThroughId: string | null): Promise<void> {
+    const session = sessionsDb.getSessionById(sessionId);
+    if (!session) {
+      throw new AppError(`Session "${sessionId}" was not found.`, {
+        code: 'SESSION_NOT_FOUND',
+        statusCode: 404,
+      });
+    }
+
+    const sessions = providerRegistry.resolveProvider(session.provider as LLMProvider).sessions;
+    await sessions.rewindSession?.(sessionId, keepThroughId);
+  },
+
   async fetchHistory(
     sessionId: string,
     options: Pick<FetchHistoryOptions, 'limit' | 'offset'> = {},
@@ -281,12 +506,51 @@ export const sessionsService = {
     }
 
     const provider = session.provider as LLMProvider;
-    const result = await providerRegistry.resolveProvider(provider).sessions.fetchHistory(sessionId, {
-      limit: options.limit ?? null,
-      offset: options.offset ?? 0,
-      projectPath: session.project_path ?? '',
-      providerSessionId: session.provider_session_id,
+    const providerSessions = providerRegistry.resolveProvider(provider).sessions;
+    const providerSessionId = session.provider_session_id;
+    const projectPath = session.project_path ?? '';
+    const requestedLimit = options.limit ?? null;
+    const requestedOffset = options.offset ?? 0;
+
+    // Claude and Codex history readers parse `jsonl_path` itself, so a page
+    // can be sliced from the stat-validated full-transcript cache instead of
+    // re-parsing the whole file per request. Cursor and OpenCode read their
+    // messages from elsewhere (store.db / shared SQLite), so that file's stat
+    // says nothing about their history — they stay on the direct path.
+    const transcriptPath = provider === 'claude' || provider === 'codex'
+      ? session.jsonl_path
+      : null;
+    const fullHistory = await sessionHistoryCache.getFullHistory({
+      sessionId,
+      transcriptPath,
+      loadFull: () => providerSessions.fetchHistory(sessionId, {
+        limit: null,
+        offset: 0,
+        projectPath,
+        providerSessionId,
+      }),
     });
+
+    let result: FetchHistoryResult;
+    if (fullHistory) {
+      // Providers slice with this same helper, so a cached page is identical
+      // to what a direct `(limit, offset)` read would have returned.
+      const { page, hasMore } = sliceTailPage(fullHistory.messages, requestedLimit, Math.max(0, requestedOffset));
+      result = {
+        ...fullHistory,
+        messages: page,
+        hasMore,
+        offset: requestedOffset,
+        limit: requestedLimit,
+      };
+    } else {
+      result = await providerSessions.fetchHistory(sessionId, {
+        limit: requestedLimit,
+        offset: requestedOffset,
+        projectPath,
+        providerSessionId,
+      });
+    }
 
     return {
       ...result,
@@ -294,6 +558,77 @@ export const sessionsService = {
         ...message,
         sessionId,
       })),
+    };
+  },
+
+  /**
+   * Reads what one agent of a workflow run did, for the card that opened it.
+   *
+   * Not found covers both a provider that spawns no workflow agents and a run
+   * that left no transcript for this agent: either way there is nothing to
+   * show, and the card says so in one line.
+   */
+  async readWorkflowAgentActivity(sessionId: string, runId: string, agentId: string): Promise<WorkflowAgentActivity> {
+    const session = sessionsDb.getSessionById(sessionId);
+    if (!session) {
+      throw new AppError(`Session "${sessionId}" was not found.`, {
+        code: 'SESSION_NOT_FOUND',
+        statusCode: 404,
+      });
+    }
+
+    const sessions = providerRegistry.resolveProvider(session.provider as LLMProvider).sessions;
+    const activity = await sessions.readWorkflowAgentActivity?.(sessionId, runId, agentId);
+    if (!activity) {
+      throw new AppError(`Workflow agent "${agentId}" was not found.`, {
+        code: 'WORKFLOW_AGENT_NOT_FOUND',
+        statusCode: 404,
+      });
+    }
+
+    return activity;
+  },
+
+  /**
+   * Resolves one session (by app id, falling back to the provider-native id)
+   * to its metadata plus the owning project.
+   *
+   * This backs deep links like `/session/:sessionId`: the frontend's paginated
+   * project payloads only carry each project's first session page, so a
+   * session opened directly by URL may not be present client-side at all —
+   * this lookup is the authoritative way to learn which project owns it.
+   */
+  getSessionDetailsById(sessionId: string): SessionDetails {
+    const session =
+      sessionsDb.getSessionById(sessionId) ?? sessionsDb.getSessionByProviderSessionId(sessionId);
+    if (!session) {
+      throw new AppError(`Session "${sessionId}" was not found.`, {
+        code: 'SESSION_NOT_FOUND',
+        statusCode: 404,
+      });
+    }
+
+    const projectPath = session.project_path?.trim() ? session.project_path : null;
+    const project = projectPath ? projectsDb.getProjectPath(projectPath) : null;
+
+    return {
+      sessionId: session.session_id,
+      provider: session.provider as LLMProvider,
+      summary: session.custom_name?.trim() || '',
+      createdAt: session.created_at ?? null,
+      updatedAt: session.updated_at ?? null,
+      lastActivity: session.updated_at ?? session.created_at ?? null,
+      isArchived: Boolean(session.isArchived),
+      project: project && projectPath
+        ? {
+            projectId: project.project_id,
+            path: projectPath,
+            fullPath: projectPath,
+            displayName: resolveProjectDisplayName(projectPath, project.custom_project_name),
+            isStarred: Boolean(project.isStarred),
+            isArchived: Boolean(project.isArchived),
+          }
+        : null,
     };
   },
 
@@ -363,10 +698,22 @@ export const sessionsService = {
     }
 
     let removedFromDisk = false;
-    if (options.deletedFromDisk && session.jsonl_path) {
-      removedFromDisk = await removeFileIfExists(session.jsonl_path);
+    if (options.deletedFromDisk) {
+      // Every file the conversation has lived in, not just the one the row
+      // points at now: editing a message on a provider that rewinds by
+      // branching moves the session onto a copy and leaves the earlier
+      // transcript behind. Deleting only the current one would leave the
+      // replaced turns on disk, and unreachable through the app.
+      const transcripts = [
+        ...(session.jsonl_path ? [session.jsonl_path] : []),
+        ...sessionsDb.getSupersededTranscriptPaths(sessionId),
+      ];
+      for (const transcript of transcripts) {
+        removedFromDisk = (await removeFileIfExists(transcript)) || removedFromDisk;
+      }
     }
 
+    sessionsDb.clearSupersededProviderSessions(sessionId);
     const deleted = sessionsDb.deleteSessionById(sessionId);
     if (!deleted) {
       throw new AppError(`Session "${sessionId}" was not found.`, {
@@ -379,95 +726,6 @@ export const sessionsService = {
       sessionId,
       action: 'deleted',
       deletedFromDisk: removedFromDisk,
-    };
-  },
-
-  async deleteOrArchiveSessionsByIds(
-    sessionIds: string[],
-    options: {
-      force?: boolean;
-      deletedFromDisk?: boolean;
-    } = {},
-  ): Promise<{
-    sessionIds: string[];
-    action: 'archived' | 'deleted';
-    count: number;
-    deletedFromDisk: number;
-  }> {
-    const uniqueSessionIds = Array.from(new Set(sessionIds.map((sessionId) => sessionId.trim()).filter(Boolean)));
-    if (uniqueSessionIds.length === 0) {
-      throw new AppError('sessionIds is required.', {
-        code: 'SESSION_IDS_REQUIRED',
-        statusCode: 400,
-      });
-    }
-
-    let deletedFromDisk = 0;
-    for (const sessionId of uniqueSessionIds) {
-      const result = await this.deleteOrArchiveSessionById(sessionId, options);
-      if (result.deletedFromDisk) {
-        deletedFromDisk += 1;
-      }
-    }
-
-    return {
-      sessionIds: uniqueSessionIds,
-      action: options.force ? 'deleted' : 'archived',
-      count: uniqueSessionIds.length,
-      deletedFromDisk,
-    };
-  },
-
-  async deleteOrArchiveSessionsByProjectPath(
-    projectPath: string,
-    options: {
-      force?: boolean;
-      deletedFromDisk?: boolean;
-    } = {},
-  ): Promise<{
-    projectPath: string;
-    action: 'archived' | 'deleted';
-    count: number;
-    deletedFromDisk: number;
-  }> {
-    const normalizedProjectPath = projectPath.trim();
-    if (!normalizedProjectPath) {
-      throw new AppError('projectPath is required.', {
-        code: 'PROJECT_PATH_REQUIRED',
-        statusCode: 400,
-      });
-    }
-
-    const sessions = options.force
-      ? sessionsDb.getSessionsByProjectPathIncludingArchived(normalizedProjectPath)
-      : sessionsDb.getSessionsByProjectPath(normalizedProjectPath);
-
-    if (!options.force) {
-      for (const session of sessions) {
-        sessionsDb.updateSessionIsArchived(session.session_id, true);
-      }
-
-      return {
-        projectPath: normalizedProjectPath,
-        action: 'archived',
-        count: sessions.length,
-        deletedFromDisk: 0,
-      };
-    }
-
-    let deletedFromDisk = 0;
-    for (const session of sessions) {
-      if (options.deletedFromDisk && session.jsonl_path && await removeFileIfExists(session.jsonl_path)) {
-        deletedFromDisk += 1;
-      }
-      sessionsDb.deleteSessionById(session.session_id);
-    }
-
-    return {
-      projectPath: normalizedProjectPath,
-      action: 'deleted',
-      count: sessions.length,
-      deletedFromDisk,
     };
   },
 
