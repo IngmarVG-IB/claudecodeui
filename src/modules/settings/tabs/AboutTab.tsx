@@ -2,11 +2,7 @@ import { ExternalLink, MessageSquare } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { APP_VERSION, CLOUDCLI_WORDMARK_FONT_FAMILY } from '@/shared/constants';
-
-// AGPL-3.0 section 13: users interacting with this program over a network must
-// be offered its Corresponding Source. This build's source is the `sandlot`
-// branch of the fork it was built from.
-export const SANDLOT_SOURCE_URL = 'https://github.com/IngmarVG-IB/claudecodeui/tree/sandlot';
+import { SANDLOT_SOURCE_URL } from '@/shared/sandlotLinks';
 
 /**
  * Rendered by Settings for the "about" tab: version, the source link the AGPL
