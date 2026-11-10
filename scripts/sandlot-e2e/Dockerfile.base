@@ -1,0 +1,7 @@
+FROM public.ecr.aws/amazonlinux/amazonlinux:2023
+RUN dnf install -y nodejs22 nodejs22-npm nodejs22-devel gcc-c++ make python3 tar gzip findutils procps-ng iproute shadow-utils git \
+ && dnf clean all \
+ && (command -v node || ln -s /usr/bin/node-22 /usr/bin/node) \
+ && (command -v npm || ln -s /usr/bin/npm-22 /usr/bin/npm) \
+ && (command -v npx || ln -s /usr/bin/npx-22 /usr/bin/npx) \
+ && node --version && npm --version

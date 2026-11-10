@@ -89,3 +89,13 @@ copy is left in `node_modules`. Packages come from the npm registry at build tim
 - The external-host guard looks for URLs with a scheme; a host assembled from parts at run time is not caught.
 - Settings > Agents still shows Claude's login status and can open `claude /login` in a terminal; behind the
   gateway it is not needed and would fail without egress.
+
+## Verification
+
+`scripts/sandlot-e2e/` holds the Docker check run for release `sandlot-1.37.8-s1` (arm64): `Dockerfile.base`
+(amazonlinux:2023 + nodejs22, nodejs22-devel, gcc-c++, make, python3), `run-e2e.sh` (runs as root in a container
+holding `/opt/cloudcli`, `/e2e` = this folder and `/claude-bin` = a Claude Code linux binary; writes
+`/etc/claude-code/managed-settings.json` with `ANTHROPIC_BASE_URL=http://127.0.0.1:9999`, starts `stub.mjs`, the
+prefix-keeping `proxy.mjs` on 127.0.0.1:8080 and the server as uid 1000), and `check.mjs` (25 checks through
+`/absproxy/8091`). Result on 2026-11-10 with Claude Code 2.1.295: 25/25, bound to 127.0.0.1:8091 only, database
+dir 700 / file 600, no Claude Code binary in `/opt/cloudcli`.
