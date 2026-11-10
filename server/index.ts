@@ -14,7 +14,6 @@ import {
     closeSessionsWatcher,
     initializeSessionsWatcher,
     providerRuntimeService,
-    reapOrphanedOpenCodeServers,
 } from '@/modules/providers/index.js';
 import { chatRunRegistry, createWebSocketServer } from '@/modules/websocket/index.js';
 
@@ -31,7 +30,6 @@ import { taskmasterRoutes } from './modules/taskmaster/index.js';
 import { commandsRoutes } from './modules/commands/index.js';
 import { settingsRoutes } from './modules/settings/index.js';
 import { createSystemModule } from './modules/system/index.js';
-import { createAgentModule } from './modules/agent/index.js';
 import projectModuleRoutes from './modules/projects/projects.routes.js';
 import notificationRoutes from './modules/notifications/notifications.routes.js';
 import { userRoutes } from './modules/user/index.js';
@@ -85,18 +83,8 @@ console.log('SERVER_PORT from env:', process.env.SERVER_PORT);
 const app = express();
 const server = http.createServer(app);
 const queryClaude = providerRuntimeService.getRunner('claude');
-const queryCursor = providerRuntimeService.getRunner('cursor');
-const queryCodex = providerRuntimeService.getRunner('codex');
-const queryOpenCode = providerRuntimeService.getRunner('opencode');
 const gitRoutes = createGitModule({
     queryClaude,
-    queryCursor,
-});
-const agentRoutes = createAgentModule({
-    queryClaude,
-    queryCursor,
-    queryCodex,
-    queryOpenCode,
 });
 
 // Single WebSocket server that handles chat, shell, and plugin proxy paths.
@@ -198,9 +186,6 @@ app.use('/api/browser-use', authenticateToken, browserUseRoutes);
 // Unified provider MCP routes (protected)
 app.use('/api/providers', authenticateToken, providerRoutes);
 app.use('/api/scheduled-messages', authenticateToken, scheduledMessagesRoutes);
-
-// Agent API Routes (uses API key authentication)
-app.use('/api/agent', agentRoutes);
 
 app.use('/api/voice', authenticateToken, voiceRoutes);
 
@@ -367,18 +352,6 @@ async function startServer() {
             console.log(`${terminalTextStyles.info('[INFO]')} Installed at: ${terminalTextStyles.dim(appInstallPath)}`);
             console.log(`${terminalTextStyles.tip('[TIP]')}  Run "cloudcli status" for full configuration details`);
             console.log('');
-
-            // OpenCode turn servers a killed CloudCLI process left behind keep
-            // running until stopped; this is the first chance to do so.
-            void reapOrphanedOpenCodeServers()
-                .then((count) => {
-                    if (count > 0) {
-                        console.log(`${terminalTextStyles.info('[INFO]')} Stopped ${count} OpenCode server(s) left running by an earlier CloudCLI process`);
-                    }
-                })
-                .catch((error) => {
-                    console.warn('[WARN] Could not check for leftover OpenCode servers:', getErrorMessage(error));
-                });
 
             // Start watching the projects folder for changes
             await initializeSessionsWatcher();

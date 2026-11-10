@@ -436,7 +436,7 @@ export function createProviderTokenUsageService(
 
       const providerSessionId = session.provider_session_id || sessionId;
 
-      if (session.provider === 'cursor') {
+      if (session.provider !== 'claude') {
         return {
           used: 0,
           total: 0,
@@ -444,49 +444,8 @@ export function createProviderTokenUsageService(
           outputTokens: 0,
           breakdown: { input: 0, output: 0 },
           unsupported: true,
-          message: 'Token usage tracking not available for Cursor sessions',
+          message: 'Token usage tracking is available for Claude sessions only',
         };
-      }
-
-      if (session.provider === 'opencode') {
-        const databasePath = dependencies.getOpenCodeDatabasePath();
-        if (!dependencies.fileExists(databasePath)) {
-          throw new AppError('OpenCode database was not found.', {
-            code: 'OPENCODE_DATABASE_NOT_FOUND',
-            statusCode: 404,
-          });
-        }
-
-        return readOpenCodeTokenUsage(databasePath, providerSessionId);
-      }
-
-      if (session.provider === 'codex') {
-        const indexedFilePath = session.jsonl_path && dependencies.fileExists(session.jsonl_path)
-          ? session.jsonl_path
-          : null;
-        const sessionFilePath = indexedFilePath ?? await findCodexSessionFile(
-          path.join(dependencies.getHomeDirectory(), '.codex', 'sessions'),
-          providerSessionId,
-          dependencies,
-        );
-
-        if (!sessionFilePath) {
-          throw new AppError(`Codex session file for "${sessionId}" was not found.`, {
-            code: 'CODEX_SESSION_FILE_NOT_FOUND',
-            statusCode: 404,
-          });
-        }
-
-        const tail = await dependencies.readTextFileTail(sessionFilePath, TOKEN_USAGE_TAIL_BYTES);
-        const tailUsage = findCodexTokenUsage(tail.content);
-        if (tailUsage || tail.isComplete) {
-          return tailUsage ?? emptyCodexTokenUsage();
-        }
-
-        // A tail this large with no token_count row is pathological, but the
-        // whole file is still authoritative when it happens.
-        return findCodexTokenUsage(await dependencies.readTextFile(sessionFilePath))
-          ?? emptyCodexTokenUsage();
       }
 
       let sessionFilePath = session.jsonl_path;

@@ -57,16 +57,14 @@ type ProviderCapabilities = {
 };
 
 /**
- * The capability matrix mirrors what each runtime actually implements today:
- * - permission modes match the option sets accepted by each CLI/SDK.
- * - the Claude and OpenCode SDK integrations surface interactive permission
- *   requests (and the agent's questions); Cursor and Codex run without them.
- * - Cursor has no token usage endpoint support (its store.db has no usage rows).
+ * Sandlot builds carry the Claude provider only. Its permission modes are the
+ * three the server accepts (see shared/permission-modes.ts): no `auto`, no
+ * `bypassPermissions`.
  */
 const PROVIDER_CAPABILITIES: Record<LLMProvider, ProviderCapabilities> = {
   claude: {
     provider: 'claude',
-    permissionModes: ['default', 'auto', 'acceptEdits', 'bypassPermissions', 'plan'],
+    permissionModes: ['default', 'acceptEdits', 'plan'],
     defaultPermissionMode: 'default',
     supportsImages: true,
     supportsFiles: true,
@@ -83,65 +81,6 @@ const PROVIDER_CAPABILITIES: Record<LLMProvider, ProviderCapabilities> = {
     // Streaming input stays open for the whole run, and a user message written
     // to it with priority `next` joins the running turn.
     supportsSteering: true,
-  },
-  cursor: {
-    provider: 'cursor',
-    permissionModes: ['default', 'acceptEdits', 'bypassPermissions', 'plan'],
-    defaultPermissionMode: 'default',
-    supportsImages: true,
-    supportsFiles: true,
-    supportsAbort: true,
-    supportsPermissionRequests: false,
-    supportsTokenUsage: false,
-    supportsEffort: false,
-    effortLevels: [],
-    supportsMessageEditing: false,
-    supportsSessionForking: false,
-    supportsSideQuestions: false,
-    supportsSteering: false,
-  },
-  codex: {
-    provider: 'codex',
-    permissionModes: ['default', 'acceptEdits', 'bypassPermissions'],
-    defaultPermissionMode: 'default',
-    supportsImages: true,
-    supportsFiles: true,
-    supportsAbort: true,
-    supportsPermissionRequests: false,
-    supportsTokenUsage: true,
-    supportsEffort: true,
-    effortLevels: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
-    // Not from the Codex SDK, which only starts and resumes threads: both ride
-    // the same CLI's `app-server` protocol, whose `thread/fork` copies a
-    // thread up to a chosen turn. Editing is that fork plus a new prompt,
-    // which is how Codex's own IDE clients do it.
-    supportsMessageEditing: true,
-    supportsSessionForking: true,
-    supportsSideQuestions: true,
-    supportsSteering: false,
-  },
-  opencode: {
-    provider: 'opencode',
-    // Mapped by the runtime onto OpenCode's controls: the `plan` agent (plan),
-    // and its answers to OpenCode's permission requests — every request
-    // approved once (bypassPermissions), file edits approved once
-    // (acceptEdits), or the chat asked (default). See
-    // resolveAutomaticPermissionReply in the OpenCode runtime adapter.
-    permissionModes: ['default', 'acceptEdits', 'bypassPermissions', 'plan'],
-    defaultPermissionMode: 'default',
-    supportsImages: true,
-    supportsFiles: true,
-    supportsAbort: true,
-    supportsPermissionRequests: true,
-    supportsTokenUsage: true,
-    supportsEffort: true,
-    // Passed on as OpenCode's model `variant`. `thinking` (MiniMax's on/off
-    // variant, paired with `none`) is not a strength, so it sorts last.
-    effortLevels: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'thinking'],
-    supportsMessageEditing: false,
-    supportsSessionForking: false,
-    supportsSideQuestions: true,
-    supportsSteering: false,
   },
 };
 

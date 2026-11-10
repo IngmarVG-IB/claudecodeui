@@ -16,7 +16,6 @@ type GitRouterDependencies = {
   spawnProcess: typeof import('cross-spawn').default;
   resolveProjectPathById(projectId: string): string | null;
   queryClaude: ProviderRunFunction;
-  queryCursor: ProviderRunFunction;
 };
 
 /** Creates Git routes around explicit repository, filesystem, subprocess, and AI adapters. */
@@ -25,7 +24,6 @@ const fs = dependencies.fileSystem;
 const spawn = dependencies.spawnProcess;
 const projectsDb = { getProjectPathById: dependencies.resolveProjectPathById };
 const queryClaudeSDK = dependencies.queryClaude;
-const spawnCursor = dependencies.queryCursor;
 const router = express.Router();
 const COMMIT_DIFF_CHARACTER_LIMIT = 500_000;
 
@@ -1052,8 +1050,8 @@ router.post('/generate-commit-message', async (req, res) => {
   }
 
   // Validate provider
-  if (!['claude', 'cursor'].includes(provider)) {
-    return res.status(400).json({ error: 'provider must be "claude" or "cursor"' });
+  if (provider !== 'claude') {
+    return res.status(400).json({ error: 'provider must be "claude"' });
   }
 
   try {
@@ -1110,10 +1108,10 @@ router.post('/generate-commit-message', async (req, res) => {
 });
 
 /**
- * Generates a commit message using AI (Claude SDK or Cursor CLI)
+ * Generates a commit message using the Claude SDK
  * @param {Array<string>} files - List of changed files
  * @param {string} diffContext - Git diff content
- * @param {string} provider - 'claude' or 'cursor'
+ * @param {string} provider - 'claude'
  * @param {string} projectPath - Project directory path
  * @returns {Promise<string>} Generated commit message
  */
@@ -1162,11 +1160,6 @@ Generate the commit message:`;
               }
             }
           }
-          // Cursor CLI sends: {type: 'cursor-output', output: '...'}
-          else if (parsed.type === 'cursor-output' && parsed.output) {
-            console.log('✅ Cursor output:', parsed.output.substring(0, 100));
-            responseText += parsed.output;
-          }
           // Also handle direct text messages
           else if (parsed.type === 'text' && parsed.text) {
             console.log('✅ Direct text:', parsed.text.substring(0, 100));
@@ -1187,14 +1180,16 @@ Generate the commit message:`;
     if (provider === 'claude') {
       await queryClaudeSDK(prompt, {
         cwd: projectPath,
-        permissionMode: 'bypassPermissions',
+        // Sandlot: never bypassPermissions. The diff is in the prompt, so
+        // no tool is needed; the tools that change anything are refused
+        // outright and anything else falls to the normal approval path.
+        permissionMode: 'default',
+        toolsSettings: {
+          allowedTools: [],
+          disallowedTools: ['Bash', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'WebFetch', 'WebSearch', 'Task'],
+        },
         model: 'sonnet',
         unattended: true, // No person is there to answer an MCP server's request for input
-      }, writer);
-    } else if (provider === 'cursor') {
-      await spawnCursor(prompt, {
-        cwd: projectPath,
-        skipPermissions: true
       }, writer);
     }
 
