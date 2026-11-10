@@ -3,17 +3,18 @@ import type { Server as HttpServer } from 'node:http';
 import { WebSocket, WebSocketServer, type VerifyClientCallbackSync } from 'ws';
 
 import { handleChatConnection } from '@/modules/websocket/services/chat-websocket.service.js';
-import { verifyWebSocketClient } from '@/modules/websocket/services/websocket-auth.service.js';
-import { handlePluginWsProxy } from '@/modules/websocket/services/plugin-websocket-proxy.service.js';
+import { selectWebSocketProtocol, verifyWebSocketClient } from '@/modules/websocket/services/websocket-auth.service.js';
 import { handleShellConnection } from '@/modules/websocket/services/shell-websocket.service.js';
-import { handleDesktopNotificationsConnection } from '@/modules/notifications/index.js';
 import type { AuthenticatedWebSocketRequest } from '@/shared/types.js';
 
 type WebSocketServerDependencies = {
+  /** CLOUDCLI_BASE_PATH: '' or a prefix such as /absproxy/8091 that every socket path carries. */
+  basePath: string;
+  /** Called for every authenticated socket; the returned function runs on close (heartbeat file). */
+  onAuthenticatedConnection?: () => () => void;
   verifyClient: Parameters<typeof verifyWebSocketClient>[1];
   chat: Parameters<typeof handleChatConnection>[2];
   shell: Parameters<typeof handleShellConnection>[1];
-  getPluginPort: Parameters<typeof handlePluginWsProxy>[2];
 };
 
 /**
@@ -77,8 +78,9 @@ export function attachWebSocketHeartbeat(
 }
 
 /**
- * Creates and wires the server-wide websocket gateway used for chat, shell, and
- * plugin proxy routes. Exported through the websocket module for server startup.
+ * Creates and wires the server-wide websocket gateway used for the chat (/ws)
+ * and shell (/shell) routes, both under CLOUDCLI_BASE_PATH. Exported through
+ * the websocket module for server startup.
  */
 export function createWebSocketServer(
   server: HttpServer,
@@ -86,6 +88,9 @@ export function createWebSocketServer(
 ): WebSocketServer {
   const wss = new WebSocketServer({
     server,
+    // Sandlot: the token may arrive as a subprotocol; only `cloudcli.bearer`
+    // is ever echoed back, never the token.
+    handleProtocols: (protocols) => selectWebSocketProtocol(protocols),
     verifyClient: ((
       info: Parameters<VerifyClientCallbackSync<AuthenticatedWebSocketRequest>>[0]
     ) => verifyWebSocketClient(info, dependencies.verifyClient)),
@@ -96,7 +101,22 @@ export function createWebSocketServer(
 
     const incomingRequest = request as AuthenticatedWebSocketRequest;
     const url = incomingRequest.url ?? '/';
-    const pathname = new URL(url, 'http://localhost').pathname;
+    const fullPathname = new URL(url, 'http://localhost').pathname;
+    const basePath = dependencies.basePath;
+    // Every socket lives under the base path; anything else is closed.
+    if (basePath && !(fullPathname === basePath || fullPathname.startsWith(`${basePath}/`))) {
+      console.log('[WARN] WebSocket path outside CLOUDCLI_BASE_PATH:', fullPathname);
+      ws.close();
+      return;
+    }
+    const pathname = basePath ? fullPathname.slice(basePath.length) || '/' : fullPathname;
+
+    if (pathname === '/shell' || pathname === '/ws') {
+      const release = dependencies.onAuthenticatedConnection?.();
+      if (release) {
+        ws.once('close', release);
+      }
+    }
 
     if (pathname === '/shell') {
       handleShellConnection(ws, dependencies.shell);
@@ -105,16 +125,6 @@ export function createWebSocketServer(
 
     if (pathname === '/ws') {
       handleChatConnection(ws, incomingRequest, dependencies.chat);
-      return;
-    }
-
-    if (pathname === '/desktop-notifications') {
-      handleDesktopNotificationsConnection(ws, incomingRequest);
-      return;
-    }
-
-    if (pathname.startsWith('/plugin-ws/')) {
-      handlePluginWsProxy(ws, pathname, dependencies.getPluginPort);
       return;
     }
 

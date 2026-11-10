@@ -112,7 +112,7 @@ async function runSideQuestionQuery(
     includePartialMessages: true,
     cwd: request.projectPath ?? undefined,
     abortController,
-    pathToClaudeCodeExecutable: resolveClaudeCodeExecutablePath(process.env.CLAUDE_CLI_PATH),
+    pathToClaudeCodeExecutable: resolveClaudeCodeExecutablePath(),
     systemPrompt: { type: 'preset', preset: 'claude_code', append: SIDE_QUESTION_SYSTEM_PROMPT_APPEND },
   };
 

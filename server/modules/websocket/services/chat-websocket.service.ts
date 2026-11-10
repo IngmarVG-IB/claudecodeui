@@ -4,6 +4,7 @@ import path from 'node:path';
 import type { WebSocket } from 'ws';
 
 import { sessionsDb } from '@/modules/database/index.js';
+import { findPermissionModeViolation, PERMISSION_MODE_REFUSED } from '@/shared/permission-modes.js';
 import {
   MAX_CONCURRENT_SIDE_QUESTIONS_PER_SESSION,
   providerCapabilitiesService,
@@ -249,6 +250,16 @@ async function dispatchRun(
   beforeRun?: (run: NonNullable<ReturnType<typeof chatRunRegistry.startRun>>) => void | Promise<void>,
 ): Promise<{ started: boolean; error: string | null }> {
   const provider = session.provider as LLMProvider;
+
+  // Sandlot: refuse bypassPermissions / auto / skipPermissions before a run
+  // is registered or a CLI started.
+  const permissionViolation = findPermissionModeViolation(data.options);
+  if (permissionViolation) {
+    if (ws) {
+      sendProtocolError(ws, PERMISSION_MODE_REFUSED, permissionViolation, sessionId);
+    }
+    return { started: false, error: permissionViolation };
+  }
 
   const run = chatRunRegistry.startRun({
     appSessionId: sessionId,

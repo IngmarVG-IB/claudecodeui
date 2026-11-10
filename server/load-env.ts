@@ -1,8 +1,9 @@
 // Load environment variables from .env before other imports execute.
 import fs from 'fs';
-import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
+
+import { initSandlotConfig, SandlotConfigError } from './sandlot/config.js';
 
 // This bootstrap cannot import shared/utils.ts: that module reads environment
 // defaults during evaluation, before this file has loaded `.env`.
@@ -38,10 +39,18 @@ try {
   console.error('No .env file found or error reading it:', e.message);
 }
 
-// Keep the default database in a stable user-level location so rebuilding dist-server
-// never changes where the backend stores auth.db when DATABASE_PATH is not set explicitly.
-const DEFAULT_DATABASE_PATH = path.join(os.homedir(), '.cloudcli', 'auth.db');
-
-if (!process.env.DATABASE_PATH) {
-  process.env.DATABASE_PATH = DEFAULT_DATABASE_PATH;
+// Sandlot: check the environment contract before any other module is
+// evaluated (this file is the server entry's first import), so a bad value
+// stops the process before it touches the database, a port or a child process.
+try {
+  const config = initSandlotConfig();
+  // The database module reads DATABASE_PATH; hand it the resolved file path.
+  process.env.DATABASE_PATH = config.databasePath;
+} catch (error) {
+  if (error instanceof SandlotConfigError) {
+    console.error(`[FATAL] ${error.message}`);
+  } else {
+    console.error('[FATAL] Could not read the Sandlot environment contract:', error);
+  }
+  process.exit(1);
 }

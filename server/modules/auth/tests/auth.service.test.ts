@@ -7,89 +7,57 @@ import { createAuthService } from '../auth.service.js';
 
 type AuthDependencies = Parameters<typeof createAuthService>[0];
 
-function createDependencies(overrides: Partial<AuthDependencies> = {}): AuthDependencies {
-  return {
-    users: {
-      hasUsers: () => false,
-      createUser: (username, passwordHash) => ({ id: 1, username, password_hash: passwordHash }),
-      getUserByUsername: () => undefined,
-      updateLastLogin: () => undefined,
-    },
-    transaction: {
-      begin: () => undefined,
-      commit: () => undefined,
-      rollback: () => undefined,
-    },
-    hashPassword: async () => 'hashed-password',
-    comparePassword: async () => false,
+function createDependencies(overrides: Partial<AuthDependencies> = {}): AuthDependencies & { delays: number } {
+  const state = { delays: 0 };
+  const dependencies = {
+    getUser: () => ({ id: 1, username: 'sandlot' }),
+    verifyPassword: (password: string) => password === 'right',
+    updateLastLogin: () => undefined,
     generateToken: () => 'signed-token',
+    failureDelay: async () => {
+      state.delays += 1;
+    },
     ...overrides,
   };
+  return Object.assign(dependencies, {
+    get delays() {
+      return state.delays;
+    },
+  });
 }
 
-test('register hashes credentials and commits through injected dependencies', async () => {
-  const operations: string[] = [];
-  const service = createAuthService(createDependencies({
-    transaction: {
-      begin: () => operations.push('begin'),
-      commit: () => operations.push('commit'),
-      rollback: () => operations.push('rollback'),
-    },
-    hashPassword: async (password) => {
-      operations.push(`hash:${password}`);
-      return 'hash';
-    },
-    users: {
-      hasUsers: () => false,
-      createUser: (username, passwordHash) => {
-        operations.push(`create:${username}:${passwordHash}`);
-        return { id: 1, username, password_hash: passwordHash };
-      },
-      getUserByUsername: () => undefined,
-      updateLastLogin: (userId) => operations.push(`login:${userId}`),
-    },
-  }));
+test('status never asks for setup in Sandlot mode', () => {
+  const service = createAuthService(createDependencies());
+  assert.deepEqual(service.getStatus(), { needsSetup: false, isAuthenticated: false, mode: 'sandlot' });
+});
 
-  const result = await service.register('alice', 'secret12');
-
+test('login with the right password returns a token for the single user', async () => {
+  let lastLogin: number | null = null;
+  const service = createAuthService(createDependencies({ updateLastLogin: (id) => { lastLogin = id; } }));
+  const result = await service.login('right');
   assert.equal(result.token, 'signed-token');
-  assert.deepEqual(operations, ['begin', 'hash:secret12', 'create:alice:hash', 'commit', 'login:1']);
+  assert.deepEqual(result.user, { id: 1, username: 'sandlot' });
+  assert.equal(lastLogin, 1);
 });
 
-test('login rejects an invalid password without issuing a token', async () => {
-  let tokenIssued = false;
-  const service = createAuthService(createDependencies({
-    users: {
-      hasUsers: () => true,
-      createUser: () => { throw new Error('unused'); },
-      getUserByUsername: () => ({ id: 1, username: 'alice', password_hash: 'hash' }),
-      updateLastLogin: () => undefined,
-    },
-    comparePassword: async () => false,
-    generateToken: () => {
-      tokenIssued = true;
-      return 'token';
-    },
-  }));
-
-  await assert.rejects(
-    service.login('alice', 'wrong-password'),
-    (error: unknown) => error instanceof AppError && error.code === 'AUTH_INVALID_CREDENTIALS',
-  );
-  assert.equal(tokenIssued, false);
+test('login with a wrong password is a 401 after the failure delay', async () => {
+  const dependencies = createDependencies();
+  const service = createAuthService(dependencies);
+  await assert.rejects(service.login('wrong'), (error: unknown) => (
+    error instanceof AppError && error.statusCode === 401 && error.code === 'AUTH_INVALID_CREDENTIALS'
+  ));
+  assert.equal(dependencies.delays, 1);
 });
 
-test('refreshSession issues a replacement token for the authenticated user', () => {
-  let tokenUser: { id: number | bigint; username: string } | undefined;
-  const service = createAuthService(createDependencies({
-    generateToken: (user) => {
-      tokenUser = user;
-      return 'replacement-token';
-    },
-  }));
+test('login without a password is a 400', async () => {
+  const service = createAuthService(createDependencies());
+  await assert.rejects(service.login(undefined), (error: unknown) => (
+    error instanceof AppError && error.statusCode === 400
+  ));
+});
 
-  const result = service.refreshSession({ id: 7, username: 'alice' });
-
-  assert.deepEqual(result, { token: 'replacement-token' });
-  assert.deepEqual(tokenUser, { id: 7, username: 'alice' });
+test('the service has no register and no refresh', () => {
+  const service = createAuthService(createDependencies()) as Record<string, unknown>;
+  assert.equal(service.register, undefined);
+  assert.equal(service.refreshSession, undefined);
 });

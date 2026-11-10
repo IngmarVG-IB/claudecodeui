@@ -5,6 +5,7 @@ import path from 'node:path';
 import pty, { type IPty } from 'node-pty';
 import { WebSocket, type RawData } from 'ws';
 
+import { resolveClaudeCodeExecutablePath } from '@/shared/claude-cli-path.js';
 import { parseIncomingJsonObject, stripAnsiSequences } from '@/shared/utils.js';
 
 type ShellIncomingMessage = {
@@ -19,7 +20,6 @@ type ShellIncomingMessage = {
   initialCommand?: string;
   isPlainShell?: boolean;
   forceRestart?: boolean;
-  bypassPermissions?: boolean;
   colorScheme?: string;
 };
 
@@ -226,49 +226,23 @@ function buildShellCommand(
     return otherProgram(initialCommand);
   }
 
-  if (provider === 'cursor') {
-    if (resumeSessionId) {
-      return otherProgram(`cursor-agent --resume="${resumeSessionId}"`);
-    }
-    return otherProgram('cursor-agent');
-  }
-
-  if (provider === 'codex') {
-    if (resumeSessionId) {
-      if (os.platform() === 'win32') {
-        return otherProgram(`codex resume "${resumeSessionId}"; if ($LASTEXITCODE -ne 0) { codex }`);
-      }
-      return otherProgram(`codex resume "${resumeSessionId}" || codex`);
-    }
-    return otherProgram('codex');
-  }
-
-  if (provider === 'opencode') {
-    if (resumeSessionId) {
-      return otherProgram(`opencode --session "${resumeSessionId}"`);
-    }
-    return otherProgram(initialCommand || 'opencode');
-  }
-
-  // Launching with the flag is what unlocks "bypass permissions" in the CLI's
-  // shift+tab permission-mode cycle; it cannot be enabled from inside a
-  // session started without it.
-  const bypassFlag = readBoolean(message.bypassPermissions)
-    ? ' --dangerously-skip-permissions'
-    : '';
+  // Sandlot: the shell's agent is the same pinned Claude Code the chat runs
+  // (CLAUDE_CLI_PATH), never whatever `claude` PATH finds, and it is never
+  // started with --dangerously-skip-permissions.
+  const claude = quoteShellArgument(resolveClaudeCodeExecutablePath());
   const theme = buildClaudeThemeLaunch(readColorScheme(message.colorScheme), projectPath);
-  const launchFlags = `${bypassFlag}${theme.flag}`;
+  const launchFlags = theme.flag;
   if (resumeSessionId) {
     const command = os.platform() === 'win32'
-      ? `claude --resume "${resumeSessionId}"${launchFlags}; if ($LASTEXITCODE -ne 0) { claude${launchFlags} }`
-      : `claude --resume "${resumeSessionId}"${launchFlags} || claude${launchFlags}`;
+      ? `& ${claude} --resume "${resumeSessionId}"${launchFlags}; if ($LASTEXITCODE -ne 0) { & ${claude}${launchFlags} }`
+      : `${claude} --resume "${resumeSessionId}"${launchFlags} || ${claude}${launchFlags}`;
     return { command, claudeFollowsAppTheme: theme.followsAppTheme };
   }
   if (initialCommand) {
     // A caller's own command (e.g. `claude /login`) is launched as given.
     return otherProgram(initialCommand);
   }
-  return { command: `claude${launchFlags}`, claudeFollowsAppTheme: theme.followsAppTheme };
+  return { command: `${claude}${launchFlags}`, claudeFollowsAppTheme: theme.followsAppTheme };
 }
 
 // Claude Code's built-in theme ids (the `/theme` picker of CLI 2.1.280). A

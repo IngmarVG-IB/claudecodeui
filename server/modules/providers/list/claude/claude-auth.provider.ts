@@ -34,13 +34,7 @@ export class ClaudeProviderAuth implements IProviderAuth {
    * host, and which version it is.
    */
   checkInstalled(): CliVersionProbe {
-    const cliPath = resolveClaudeCodeExecutablePath(process.env.CLAUDE_CLI_PATH);
-    if (!cliPath) {
-      // Windows with no resolvable CLI: the SDK falls back to the binary it
-      // bundles, so chats still work. Its version is not this CLI's to report.
-      return { installed: true, exitCode: null, version: null };
-    }
-    return probeCliVersion(cliPath);
+    return probeCliVersion(resolveClaudeCodeExecutablePath());
   }
 
   /**

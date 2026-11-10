@@ -41,7 +41,8 @@ import type {
  * modules use this shared flag to keep environment-dependent behavior aligned.
  * Environment variables must be loaded before this module is evaluated.
  */
-export const IS_PLATFORM = process.env.VITE_IS_PLATFORM === 'true';
+// Sandlot build: platform mode (auth bypass via the first DB user) is removed.
+export const IS_PLATFORM = false;
 
 // ---------------------------
 //----------------- NORMALIZED MESSAGE HELPER INPUT TYPES ------------

@@ -34,7 +34,8 @@ const __dirname = path.dirname(__filename);
  *   2. Legacy path: server/database/auth.db
  */
 function resolveDatabasePath(): string {
-    // process.env.DATABASE_PATH is set by load-env-vars.js to either the .env value or a default(~/.cloudcli/auth.db) in the user's home directory. 
+    // Sandlot: load-env.ts sets DATABASE_PATH from the validated contract
+    // (default ~/.local/share/cloudcli/auth.db).
     return process.env.DATABASE_PATH || resolveLegacyDatabasePath();
 }
 
@@ -51,43 +52,38 @@ function resolveLegacyDatabasePath(): string {
 // Directory & migration helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Sandlot: the database directory is private to the user (0700) and the
+ * database file and its SQLite side files are 0600. The mode is set
+ * explicitly rather than through the umask, which the Claude Code child
+ * process would inherit for every file it writes.
+ */
 function ensureDatabaseDirectory(dbPath: string): void {
   const dir = path.dirname(dbPath);
   if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     console.log('Created database directory:', dir);
   }
+  fs.chmodSync(dir, 0o700);
 }
 
-/**
- * If the database was moved to an external location (e.g. ~/.cloudcli/)
- * but the user still has a legacy auth.db inside the install directory,
- * copy it to the new location as a one-time migration.
- */
-function migrateLegacyDatabase(targetPath: string): void {
-  const legacyPath = resolveLegacyDatabasePath();
+function ensureDatabaseFile(dbPath: string): void {
+  // Create it empty with 0600 before SQLite opens it, so it never exists
+  // with wider permissions.
+  fs.closeSync(fs.openSync(dbPath, 'a', 0o600));
+  restrictDatabaseFiles(dbPath);
+}
 
-  if (targetPath === legacyPath) return;
-  if (fs.existsSync(targetPath)) return;
-  if (!fs.existsSync(legacyPath)) return;
-
-  try {
-    fs.copyFileSync(legacyPath, targetPath);
-    console.log('Migrated legacy database', { from: legacyPath, to: targetPath });
-
-
-    // copy the write-ahead log and shared memory files (auth.db-wal, auth.db-shm) if they exist, to preserve any uncommitted transactions
-    for (const suffix of ['-wal', '-shm']) {
-      const src = legacyPath + suffix;
-      if (fs.existsSync(src)) {
-        fs.copyFileSync(src, targetPath + suffix);
-      }
+/** Sets 0600 on the database file and any -wal, -shm or -journal file beside it. */
+export function restrictDatabaseFiles(dbPath: string = resolveDatabasePath()): void {
+  for (const suffix of ['', '-wal', '-shm', '-journal']) {
+    try {
+      fs.chmodSync(dbPath + suffix, 0o600);
+    } catch (error: any) {
+      if (error?.code !== 'ENOENT') throw error;
     }
-  } catch (err: any) {
-    console.error('Could not migrate legacy database', { error: err.message });
   }
 }
-
 
 // ---------------------------------------------------------------------------
 // Singleton connection
@@ -101,7 +97,7 @@ let instance: Database.Database | null = null;
  * The first invocation:
  *   1. Resolves the target database path
  *   2. Ensures the parent directory exists
- *   3. Migrates from the legacy install-directory path if needed
+ *   3. Creates the file with mode 0600 (directory 0700)
  *   4. Opens the SQLite connection
  *   5. Eagerly creates the app_config table (auth reads JWT secret at import time)
  *   6. Logs the database location
@@ -112,7 +108,7 @@ export function getConnection(): Database.Database {
   const dbPath = resolveDatabasePath();
 
   ensureDatabaseDirectory(dbPath);
-  migrateLegacyDatabase(dbPath);
+  ensureDatabaseFile(dbPath);
 
   instance = new Database(dbPath);
 

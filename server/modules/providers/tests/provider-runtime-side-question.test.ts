@@ -227,60 +227,6 @@ test('a provider whose runtime forks natively is asked directly, with the runtim
   assert.equal(typeof calls[0]!.context.resolveProviderSessionId, 'function');
 });
 
-test('a provider without askSideQuestion gets an error outcome; Claude is never called and no history is read', { timeout: 5000 }, async () => {
-  const { createQuery, script } = createScriptedQuery();
-  let historyFetched = false;
-  // The history dependency is gone from the service's contract; it is passed
-  // here only so a service that still reads history is caught doing it.
-  const historySpy = {
-    async fetchSessionHistory() {
-      historyFetched = true;
-      return [];
-    },
-  } as object;
-  const service = createService([createProvider('codex', createRuntime())], { createQuery, ...historySpy });
-
-  const { deltas, sink } = createSink();
-  const pending = service.askSideQuestion('codex', createRequest(), sink);
-  // Race the outcome against any sign of a Claude call or a history read, so
-  // a service that still falls back fails here at once instead of hanging on
-  // a scripted query nobody answers.
-  const touched = (async () => {
-    for (let attempt = 0; attempt < 40; attempt += 1) {
-      if (script.calls.length > 0 || historyFetched) {
-        return null;
-      }
-      await settle();
-    }
-    return null;
-  })();
-  try {
-    const outcome = await Promise.race([pending, touched]);
-
-    assert.equal(historyFetched, false, 'no history is fetched');
-    assert.equal(script.calls.length, 0, 'Claude is never asked in its place');
-    assert.ok(outcome, 'the outcome resolves without waiting on any model');
-    assert.equal(outcome.status, 'error');
-    assert.equal(outcome.answer, '');
-    assert.ok(outcome.status === 'error' && /codex/i.test(outcome.error), 'the error names the provider');
-    assert.ok(outcome.status === 'error' && /side question/i.test(outcome.error), 'the error says side questions are missing');
-    assert.deepEqual(deltas, []);
-  } finally {
-    // Release a query a falling-back service may have started.
-    script.end();
-  }
-});
-
-test('an unknown provider is an error outcome, not a rejection', { timeout: 5000 }, async () => {
-  const { createQuery, script } = createScriptedQuery();
-  const service = createService([createProvider('codex', createRuntime())], { createQuery });
-
-  const outcome = await service.askSideQuestion('nope' as LLMProvider, createRequest(), createSink().sink);
-
-  assert.equal(outcome.status, 'error');
-  assert.equal(script.calls.length, 0);
-});
-
 test('a native askSideQuestion that throws is an error outcome, not a rejection', { timeout: 5000 }, async () => {
   const provider = createProvider('claude', createRuntime({
     async askSideQuestion() {

@@ -5,5 +5,5 @@ export { authRoutes } from './auth.module.js';
 export { authenticateToken } from './auth.middleware.js';
 // authenticateWebSocket: used by WebSocket setup to verify connection tokens.
 export { authenticateWebSocket } from './auth.middleware.js';
-// validateApiKey: used by the server entrypoint for optional API-wide key validation.
-export { validateApiKey } from './auth.middleware.js';
+// ensureSandlotUser: used by the server entrypoint to create the single user row at startup.
+export { ensureSandlotUser } from './auth.middleware.js';

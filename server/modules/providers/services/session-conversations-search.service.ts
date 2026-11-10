@@ -3,7 +3,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 
 import { spawn } from 'cross-spawn';
-import { rgPath } from '@vscode/ripgrep';
+import { getSandlotConfig } from '@/sandlot/config.js';
 
 import { isClaudeNonTurnMessageRow, stripAnsiSequences } from '@/shared/utils.js';
 import { projectsDb, sessionsDb } from '@/modules/database/index.js';
@@ -651,7 +651,9 @@ async function runRipgrepFilesWithMatches(
       pattern,
       ...filePaths,
     ];
-    const rg = spawn(rgPath, args, {
+    // Sandlot: CLOUDCLI_RG_PATH (code-server's bundled rg), else `rg` on PATH.
+    // No @vscode/ripgrep, whose install script downloads a binary.
+    const rg = spawn(getSandlotConfig().rgPath ?? 'rg', args, {
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
     });

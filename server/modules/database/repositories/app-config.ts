@@ -6,7 +6,6 @@
  * stored as strings; callers handle parsing.
  */
 
-import crypto from 'crypto';
 
 import { getConnection } from '@/modules/database/connection.js';
 
@@ -37,17 +36,4 @@ export const appConfigDb = {
     ).run(key, value);
   },
 
-  /**
-   * Returns the JWT signing secret, generating and persisting one
-   * if it does not already exist. This ensures the secret survives
-   * server restarts while being created automatically on first boot.
-   */
-  getOrCreateJwtSecret(): string {
-    let secret = appConfigDb.get('jwt_secret');
-    if (!secret) {
-      secret = crypto.randomBytes(64).toString('hex');
-      appConfigDb.set('jwt_secret', secret);
-    }
-    return secret;
-  },
 };

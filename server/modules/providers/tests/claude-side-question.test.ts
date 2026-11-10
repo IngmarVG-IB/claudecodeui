@@ -218,7 +218,7 @@ test('the fork resumes the session read-only with every measured option', { time
   assert.equal(options.cwd, '/tmp/side-question-project');
   assert.equal(options.model, 'claude-opus-5');
   assert.ok(options.abortController instanceof AbortController);
-  assert.equal(options.pathToClaudeCodeExecutable, resolveClaudeCodeExecutablePath(process.env.CLAUDE_CLI_PATH));
+  assert.equal(options.pathToClaudeCodeExecutable, resolveClaudeCodeExecutablePath());
   assert.equal(options.systemPrompt?.type, 'preset');
   assert.equal(options.systemPrompt?.preset, 'claude_code');
   assert.equal(typeof options.systemPrompt?.append, 'string');

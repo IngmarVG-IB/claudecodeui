@@ -29,6 +29,7 @@ import {
   CLAUDE_PREDEFINED_MODELS,
   CLAUDE_ULTRACODE_EFFORT
 } from '@/modules/providers/list/claude/claude-models.provider.js';
+import { assertAllowedPermissionMode } from '@/shared/permission-modes.js';
 import { resolveClaudeCodeExecutablePath } from '@/shared/claude-cli-path.js';
 import { askClaudeSideQuestion } from '@/modules/providers/list/claude/claude-side-question.provider.js';
 import {
@@ -384,19 +385,17 @@ function mapCliOptionsToSDK(options: AnyRecord = {}) {
 
   sdkOptions.env = buildClaudeSdkEnv();
 
-  // Resolve the executable eagerly on Windows because the SDK uses raw child_process.spawn,
-  // which does not reliably follow npm's shell wrappers like cross-spawn does.
-  // When nothing resolves the option stays unset on purpose: the SDK then falls back to the
-  // binary it ships, which beats handing it a bare `claude` that raw spawn can never launch.
-  const claudeExecutablePath = resolveClaudeCodeExecutablePath(process.env.CLAUDE_CLI_PATH);
-  if (claudeExecutablePath) {
-    sdkOptions.pathToClaudeCodeExecutable = claudeExecutablePath;
-  }
+  // Sandlot: always the validated CLAUDE_CLI_PATH. Never left unset, which
+  // would let the SDK look for a Claude Code binary of its own.
+  sdkOptions.pathToClaudeCodeExecutable = resolveClaudeCodeExecutablePath();
 
   if (cwd) {
     sdkOptions.cwd = cwd;
   }
 
+  // Sandlot: default, acceptEdits or plan only. The chat gateway refuses
+  // anything else first; this is the last check before the SDK sees it.
+  assertAllowedPermissionMode(options);
   if (permissionMode && permissionMode !== 'default') {
     sdkOptions.permissionMode = permissionMode;
   }
@@ -404,12 +403,7 @@ function mapCliOptionsToSDK(options: AnyRecord = {}) {
   const settings = toolsSettings || {
     allowedTools: [],
     disallowedTools: [],
-    skipPermissions: false
   };
-
-  if (settings.skipPermissions && permissionMode !== 'plan') {
-    sdkOptions.permissionMode = 'bypassPermissions';
-  }
 
   let allowedTools = [...(settings.allowedTools || [])];
 
@@ -1433,10 +1427,6 @@ async function queryClaudeSDK(
       const requiresInteraction = TOOLS_REQUIRING_INTERACTION.has(toolName);
 
       if (!requiresInteraction) {
-        if (sdkOptions.permissionMode === 'bypassPermissions') {
-          return { behavior: 'allow', updatedInput: input };
-        }
-
         const isDisallowed = (sdkOptions.disallowedTools || []).some((entry: string) =>
           matchesToolPermission(entry, toolName, input)
         );
@@ -1838,7 +1828,7 @@ async function queryClaudeSDK(
     // Check if Claude CLI is installed for a clearer error message
     const installed = await context.isProviderInstalled();
     const errorContent = !installed
-      ? 'Claude Code is not installed. Please install it first: https://docs.anthropic.com/en/docs/claude-code'
+      ? 'Claude Code was not found at CLAUDE_CLI_PATH.'
       : (error as Error).message;
 
     // Send error to WebSocket, then the terminal complete. A run that already

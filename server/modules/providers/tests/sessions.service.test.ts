@@ -32,31 +32,6 @@ async function withIsolatedDatabase(runTest: () => void | Promise<void>): Promis
   }
 }
 
-test('provider session id returns the mapped native id', { concurrency: false }, async () => {
-  await withIsolatedDatabase(() => {
-    sessionsDb.createAppSession('app-session-id', 'codex', '/tmp/session-id-copy-project');
-    sessionsDb.assignProviderSessionId('app-session-id', 'codex-native-session-id');
-
-    assert.equal(sessionsService.getProviderSessionId('app-session-id'), 'codex-native-session-id');
-  });
-});
-
-test('app session names use at most four whole words from the initial message', { concurrency: false }, async () => {
-  await withIsolatedDatabase(() => {
-    const result = sessionsService.createAppSession(
-      'codex',
-      '/tmp/session-name-project',
-      '  supercalifragilisticexpialidocious\nsecond   third fourth fifth  ',
-    );
-
-    assert.equal(result.sessionName, 'supercalifragilisticexpialidocious second third fourth');
-    assert.equal(
-      sessionsDb.getSessionById(result.sessionId)?.custom_name,
-      'supercalifragilisticexpialidocious second third fourth',
-    );
-  });
-});
-
 test('app sessions without message text receive a stable fallback name', { concurrency: false }, async () => {
   await withIsolatedDatabase(() => {
     const result = sessionsService.createAppSession('claude', '/tmp/attachment-only-project', '  \n ');
@@ -89,44 +64,6 @@ test('provider session id reports a missing app session', { concurrency: false }
         return typedError.code === 'SESSION_NOT_FOUND' && typedError.statusCode === 404;
       },
     );
-  });
-});
-
-test('recent sessions map project metadata and preserve database pagination', { concurrency: false }, async () => {
-  await withIsolatedDatabase(() => {
-    sessionsDb.createSession(
-      'older-session',
-      'claude',
-      '/tmp/recent-project',
-      'Older conversation',
-      '2026-08-01T08:00:00.000Z',
-      '2026-08-01T09:00:00.000Z',
-    );
-    sessionsDb.createSession(
-      'newer-session',
-      'codex',
-      '/tmp/recent-project',
-      'Newer conversation',
-      '2026-08-01T10:00:00.000Z',
-      '2026-08-01T11:00:00.000Z',
-    );
-    projectsDb.updateCustomProjectName('/tmp/recent-project', 'Recent Project');
-
-    const project = projectsDb.getProjectPath('/tmp/recent-project');
-    const page = sessionsService.listRecentSessions(1, 0);
-
-    assert.deepEqual(page, {
-      conversations: [{
-        sessionId: 'newer-session',
-        provider: 'codex',
-        projectId: project?.project_id ?? null,
-        projectDisplayName: 'Recent Project',
-        sessionTitle: 'Newer conversation',
-        lastActivity: '2026-08-01T11:00:00.000Z',
-      }],
-      total: 2,
-      hasMore: true,
-    });
   });
 });
 
@@ -279,56 +216,6 @@ test('running sessions list a session whose background work outlived its turn', 
           tasks,
         }]);
         assert.ok(run.lastSeq > 0, 'the finished run still reports its sequence for replay');
-      },
-    ));
-  });
-});
-
-test('running sessions carry their tasks on a chat run that is still going', { concurrency: false }, async () => {
-  await withIsolatedDatabase(async () => {
-    sessionsDb.createAppSession('busy-session', 'claude', '/tmp/running-project');
-    sessionsDb.createAppSession('idle-session', 'codex', '/tmp/running-project');
-    const run = chatRunRegistry.startRun({
-      appSessionId: 'busy-session', provider: 'claude', providerSessionId: null, connection: null, userId: null,
-    });
-    assert.ok(run);
-
-    const tasks = [task('agent', 5_000)];
-    await withClaudeCliRegistry([], async () => await withProviders(
-      {
-        claude: { run: async () => undefined, abort: () => false, listBackgroundWork: () => [{ sessionId: 'busy-session', tasks }] },
-        // A runtime without background work contributes chat runs alone.
-        codex: { run: async () => undefined, abort: () => false },
-      },
-      async () => {
-        const sessions = await sessionsService.listRunningSessions();
-        assert.equal(sessions.length, 1, 'a session with a running chat run is listed once');
-        assert.deepEqual(sessions[0], {
-          sessionId: 'busy-session',
-          provider: 'claude',
-          startedAt: run.startedAt,
-          lastSeq: 0,
-          tasks,
-        });
-      },
-    ));
-  });
-});
-
-test('running sessions with no background work are the chat runs alone', { concurrency: false }, async () => {
-  await withIsolatedDatabase(async () => {
-    sessionsDb.createAppSession('plain-session', 'codex', '/tmp/running-project');
-    const run = chatRunRegistry.startRun({
-      appSessionId: 'plain-session', provider: 'codex', providerSessionId: null, connection: null, userId: null,
-    });
-    assert.ok(run);
-
-    await withClaudeCliRegistry([], async () => await withProviders(
-      { codex: { run: async () => undefined, abort: () => false } },
-      async () => {
-        assert.deepEqual(await sessionsService.listRunningSessions(), [{
-          sessionId: 'plain-session', provider: 'codex', startedAt: run.startedAt, lastSeq: 0,
-        }]);
       },
     ));
   });

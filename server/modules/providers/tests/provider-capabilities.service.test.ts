@@ -2,9 +2,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { CLAUDE_PREDEFINED_MODELS } from '@/modules/providers/list/claude/claude-models.provider.js';
-import { CODEX_PREDEFINED_MODELS } from '@/modules/providers/list/codex/codex-models.provider.js';
-import { CURSOR_PREDEFINED_MODELS } from '@/modules/providers/list/cursor/cursor-models.provider.js';
-import { OPENCODE_PREDEFINED_MODELS } from '@/modules/providers/list/opencode/opencode-models.provider.js';
 import { providerCapabilitiesService } from '@/modules/providers/services/provider-capabilities.service.js';
 import type { LLMProvider, ProviderModelsDefinition } from '@/shared/types.js';
 
@@ -14,9 +11,6 @@ import type { LLMProvider, ProviderModelsDefinition } from '@/shared/types.js';
  */
 const CURATED_CATALOGS: Record<LLMProvider, ProviderModelsDefinition> = {
   claude: CLAUDE_PREDEFINED_MODELS,
-  codex: CODEX_PREDEFINED_MODELS,
-  cursor: CURSOR_PREDEFINED_MODELS,
-  opencode: OPENCODE_PREDEFINED_MODELS,
 };
 
 test('capability effort levels cover every level a curated model declares', () => {
@@ -37,17 +31,7 @@ test('capability effort levels cover every level a curated model declares', () =
 });
 
 
-test('side questions are supported by claude, codex and opencode, not by cursor', () => {
-  // Cursor has no headless way to ask on the side; its menu then offers only
-  // Queue · Stop / Send anyway.
-  const expected: Record<LLMProvider, boolean> = {
-    claude: true,
-    codex: true,
-    cursor: false,
-    opencode: true,
-  };
-  for (const [provider, supported] of Object.entries(expected) as Array<[LLMProvider, boolean]>) {
-    const capabilities = providerCapabilitiesService.getProviderCapabilities(provider) as unknown as Record<string, unknown>;
-    assert.equal(capabilities.supportsSideQuestions, supported, `${provider}: supportsSideQuestions`);
-  }
+test('Sandlot: the Claude provider offers default, acceptEdits and plan only', () => {
+  const { permissionModes } = providerCapabilitiesService.getProviderCapabilities('claude');
+  assert.deepEqual(permissionModes, ['default', 'acceptEdits', 'plan']);
 });

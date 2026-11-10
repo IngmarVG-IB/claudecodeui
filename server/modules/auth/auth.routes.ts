@@ -6,8 +6,12 @@ import type { createAuthService } from './auth.service.js';
 type AuthenticatedRequest = express.Request & { user?: unknown };
 
 /**
- * Creates the Auth transport adapter. Handlers only parse request data and
- * delegate authentication behavior to the injected application service.
+ * Auth routes, Sandlot mode:
+ *   GET  /status  public, always { needsSetup: false, mode: 'sandlot' }
+ *   POST /login   public, body { "password": "..." } -> { token, user }
+ *   GET  /user    bearer token
+ *   POST /logout  bearer token (client-side logout; tokens are not revocable)
+ * There is no /register and no /refresh.
  */
 export function createAuthRouter(
   service: ReturnType<typeof createAuthService>,
@@ -23,19 +27,11 @@ export function createAuthRouter(
     }
   });
 
-  router.post('/register', async (req, res, next) => {
-    try {
-      const body = req.body as { username?: unknown; password?: unknown };
-      res.json(await service.register(body.username, body.password));
-    } catch (error) {
-      next(error);
-    }
-  });
-
   router.post('/login', async (req, res, next) => {
     try {
-      const body = req.body as { username?: unknown; password?: unknown };
-      res.json(await service.login(body.username, body.password));
+      const body = (req.body ?? {}) as { password?: unknown };
+      res.setHeader('Cache-Control', 'no-store');
+      res.json(await service.login(body.password));
     } catch (error) {
       next(error);
     }
@@ -43,10 +39,6 @@ export function createAuthRouter(
 
   router.get('/user', authenticateToken, (req, res) => {
     res.json(service.getCurrentUser((req as AuthenticatedRequest).user));
-  });
-
-  router.post('/refresh', authenticateToken, (req, res) => {
-    res.json(service.refreshSession((req as AuthenticatedRequest).user));
   });
 
   router.post('/logout', authenticateToken, (_req, res) => {
