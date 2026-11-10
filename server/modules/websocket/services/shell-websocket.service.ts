@@ -230,19 +230,21 @@ function buildShellCommand(
   // (CLAUDE_CLI_PATH), never whatever `claude` PATH finds, and it is never
   // started with --dangerously-skip-permissions.
   const claude = quoteShellArgument(resolveClaudeCodeExecutablePath());
+  // PowerShell runs a quoted path only through the call operator.
+  const invokeClaude = os.platform() === 'win32' ? `& ${claude}` : claude;
   const theme = buildClaudeThemeLaunch(readColorScheme(message.colorScheme), projectPath);
   const launchFlags = theme.flag;
   if (resumeSessionId) {
     const command = os.platform() === 'win32'
-      ? `& ${claude} --resume "${resumeSessionId}"${launchFlags}; if ($LASTEXITCODE -ne 0) { & ${claude}${launchFlags} }`
-      : `${claude} --resume "${resumeSessionId}"${launchFlags} || ${claude}${launchFlags}`;
+      ? `${invokeClaude} --resume "${resumeSessionId}"${launchFlags}; if ($LASTEXITCODE -ne 0) { ${invokeClaude}${launchFlags} }`
+      : `${invokeClaude} --resume "${resumeSessionId}"${launchFlags} || ${invokeClaude}${launchFlags}`;
     return { command, claudeFollowsAppTheme: theme.followsAppTheme };
   }
   if (initialCommand) {
     // A caller's own command (e.g. `claude /login`) is launched as given.
     return otherProgram(initialCommand);
   }
-  return { command: `${claude}${launchFlags}`, claudeFollowsAppTheme: theme.followsAppTheme };
+  return { command: `${invokeClaude}${launchFlags}`, claudeFollowsAppTheme: theme.followsAppTheme };
 }
 
 // Claude Code's built-in theme ids (the `/theme` picker of CLI 2.1.280). A

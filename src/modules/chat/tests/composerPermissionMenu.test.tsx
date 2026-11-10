@@ -15,7 +15,7 @@ import { PromptInputFooter, PromptInputTools } from '@/modules/chat/composer/Pro
  * as "nothing will be changed" and is the one users most need to see.
  */
 
-const MODES = ['default', 'auto', 'acceptEdits', 'bypassPermissions', 'plan'] as const;
+const MODES = ['default', 'acceptEdits', 'plan'] as const;
 
 test('the composer names the mode the next message runs in', () => {
   const { getByRole } = render(
@@ -66,25 +66,6 @@ const renderMenu = (permissionMode: PermissionMode, permissionModes: PermissionM
     />,
   );
 
-test('every mode leads the accessible name, a mode with no translation by its id', () => {
-  // A provider may report a mode this menu has no name for; it is named by its id.
-  const unknownMode = 'dontAsk' as PermissionMode;
-  const expected: Array<[PermissionMode, string]> = [
-    ['default', 'Default Mode'],
-    ['auto', 'Auto Mode'],
-    ['acceptEdits', 'Accept Edits'],
-    ['bypassPermissions', 'Bypass Permissions'],
-    ['plan', 'Plan Mode'],
-    [unknownMode, 'dontAsk'],
-  ];
-
-  for (const [mode, name] of expected) {
-    const { getByRole, unmount } = renderMenu(mode, [...MODES, unknownMode]);
-    const trigger = getByRole('button', { name: new RegExp(`^${name}: `) });
-    assert.equal(trigger.textContent, name);
-    unmount();
-  }
-});
 
 // jsdom has no layout, so the footer tests below give the composer the widths
 // the real app measures for Claude with text typed: 210px of left-hand tools,
@@ -228,35 +209,6 @@ test('typing the first character neither takes the name away nor brings it in', 
   assert.equal(tight.getByRole('button').textContent, '');
 });
 
-test('the trigger and the menu speak the user\'s language', async () => {
-  await act(async () => {
-    await i18n.changeLanguage('fr');
-  });
-  try {
-    const { getByRole, getAllByRole } = renderMenu('plan');
-    const trigger = getByRole('button');
-    const heading = frChat.composer.permissionHeading.replace('{{provider}}', 'Claude');
-
-    assert.equal(trigger.textContent, frChat.codex.modes.plan);
-    assert.equal(
-      trigger.getAttribute('aria-label'),
-      frChat.composer.permissionTriggerLabel.replace('{{mode}}', frChat.codex.modes.plan).replace('{{heading}}', heading),
-    );
-    assert.match(trigger.getAttribute('aria-label') ?? '', /^Mode planification : /);
-
-    fireEvent.click(trigger);
-    const rows = getAllByRole('menuitemradio');
-    assert.equal(rows.length, MODES.length);
-    MODES.forEach((mode, index) => {
-      assert.ok(rows[index].textContent?.startsWith(frChat.codex.modes[mode]), `${mode} row is in French`);
-    });
-    assert.equal(getByRole('menu').lastElementChild?.textContent, frChat.composer.permissionCycleHint);
-  } finally {
-    await act(async () => {
-      await i18n.changeLanguage('en');
-    });
-  }
-});
 
 test('the menu ends by saying Tab in the message box switches modes', () => {
   const { getByRole } = renderMenu('default');

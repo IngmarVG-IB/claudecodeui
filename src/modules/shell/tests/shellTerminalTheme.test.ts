@@ -81,7 +81,7 @@ vi.mock('@/modules/shell/utils/mobileTerminalSelection', () => ({
 // before a socket is ever constructed.
 vi.mock('@/modules/shell/utils/socket', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  getShellWebSocketUrl: () => 'ws://localhost/shell',
+  getShellWebSocketTarget: () => ({ url: 'ws://localhost/shell', protocols: [] }),
 }));
 
 // jsdom ships no ResizeObserver, and the terminal hook observes its container.
@@ -273,7 +273,6 @@ test('the shell init message tells the server which colour scheme the terminal i
       selectedSessionRef: ref<ProjectSession | null | undefined>(null),
       initialCommandRef: ref<string | null | undefined>(null),
       isPlainShellRef: ref(false),
-      bypassPermissionsRef: ref(false),
       isDarkModeRef,
       onProcessCompleteRef: ref<((exitCode: number) => void) | null | undefined>(null),
       isInitialized: true,
@@ -309,7 +308,6 @@ function ShellRuntimeHarness({ onRender }: { onRender: (view: ShellRuntimeView) 
     selectedSession: null,
     initialCommand: null,
     isPlainShell: false,
-    bypassPermissions: false,
     minimal: false,
     autoConnect: false,
     isRestarting: false,

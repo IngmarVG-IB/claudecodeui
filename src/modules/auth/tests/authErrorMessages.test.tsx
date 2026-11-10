@@ -4,7 +4,6 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import '@/modules/i18n';
 import { AuthProvider } from '@/modules/auth/context/AuthContext';
 import LoginForm from '@/modules/auth/LoginForm';
-import SetupForm from '@/modules/auth/SetupForm';
 
 type StubbedReply = { status: number; body: unknown };
 
@@ -28,27 +27,15 @@ function stubAuthApi(replies: Record<string, StubbedReply>) {
   );
 }
 
-async function submitLogin(username: string, password: string) {
+async function submitLogin(_username: string, password: string) {
   render(
     <AuthProvider>
       <LoginForm />
     </AuthProvider>,
   );
-  fireEvent.change(await screen.findByLabelText('Username'), { target: { value: username } });
-  fireEvent.change(screen.getByLabelText('Password'), { target: { value: password } });
+  // Sandlot: password only.
+  fireEvent.change(await screen.findByLabelText('Password'), { target: { value: password } });
   fireEvent.click(screen.getByRole('button', { name: 'Sign In' }));
-}
-
-async function submitSetup(username: string, password: string) {
-  render(
-    <AuthProvider>
-      <SetupForm />
-    </AuthProvider>,
-  );
-  fireEvent.change(await screen.findByLabelText('Username'), { target: { value: username } });
-  fireEvent.change(screen.getByLabelText('Password'), { target: { value: password } });
-  fireEvent.change(screen.getByLabelText('Confirm Password'), { target: { value: password } });
-  fireEvent.click(screen.getByRole('button', { name: 'Create Account' }));
 }
 
 describe('auth screens surface server errors as text', () => {
@@ -72,24 +59,6 @@ describe('auth screens surface server errors as text', () => {
     await submitLogin('triage', 'wrong-password');
 
     expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'Invalid username or password');
-    expect(document.querySelectorAll('form')).toHaveLength(1);
-  });
-
-  it('shows the message of the structured envelope when registration is rejected', async () => {
-    stubAuthApi({
-      '/api/auth/status': { status: 200, body: { needsSetup: true, isAuthenticated: false } },
-      '/api/auth/register': {
-        status: 403,
-        body: envelope('AUTH_USER_ALREADY_CONFIGURED', 'User already exists. This is a single-user system.'),
-      },
-    });
-
-    await submitSetup('triage', 'triage-pass-123');
-
-    expect(await screen.findByRole('alert')).toHaveProperty(
-      'textContent',
-      'User already exists. This is a single-user system.',
-    );
     expect(document.querySelectorAll('form')).toHaveLength(1);
   });
 

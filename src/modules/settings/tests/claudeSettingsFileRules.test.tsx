@@ -48,8 +48,6 @@ const ruleGroup = (scope: ClaudeSettingsPermissionSource['scope'], key: 'allow' 
 const renderClaudePermissions = () => render(
   <PermissionsContent
     agent="claude"
-    skipPermissions={false}
-    onSkipPermissionsChange={() => {}}
     allowedTools={['Bash(make:*)']}
     onAllowedToolsChange={() => {}}
     disallowedTools={[]}

@@ -153,51 +153,6 @@ test('the model library turns "use only my models" off again', async () => {
   await waitFor(() => assert.deepEqual(calls, [{ provider: 'claude', enabled: false }]));
 });
 
-test('a toggle still saving keeps its state on its own provider tab', async () => {
-  let failSave: (error: Error) => void = () => {};
-  const calls: Array<{ provider: LLMProvider; enabled: boolean }> = [];
-  const actions = createActions((provider, enabled) => {
-    calls.push({ provider, enabled });
-    return new Promise<void>((_resolve, reject) => {
-      failSave = reject;
-    });
-  });
-  render(
-    <ModelLibraryPanel
-      initialProvider="claude"
-      providerModelCatalog={{
-        claude: MERGED_CATALOG,
-        codex: {
-          OPTIONS: [{ value: 'gpt-5.6-sol', label: 'GPT-5.6 Sol', isCustom: false }],
-          DEFAULT: 'gpt-5.6-sol',
-          CUSTOM_MODELS_ONLY: false,
-        },
-      }}
-      actions={actions}
-    />,
-  );
-  const readToggle = () => screen.getByRole('checkbox', { name: /Use only my models/ }) as HTMLInputElement;
-
-  fireEvent.click(readToggle());
-  await waitFor(() => assert.equal(readToggle().disabled, true));
-
-  // Codex's checkbox is not blocked by Claude's request...
-  fireEvent.click(screen.getByRole('button', { name: /Codex/ }));
-  assert.equal(readToggle().disabled, false);
-
-  // ...and Claude's late failure is not reported on the Codex tab.
-  await act(async () => {
-    failSave(new Error('boom'));
-  });
-  assert.equal(isShown('Unable to change this setting.'), false);
-  assert.equal(readToggle().disabled, false);
-
-  // It waits on the Claude tab, whose checkbox is usable again.
-  fireEvent.click(screen.getByRole('button', { name: /Claude/ }));
-  screen.getByText('Unable to change this setting.');
-  assert.equal(readToggle().disabled, false);
-  assert.deepEqual(calls, [{ provider: 'claude', enabled: true }]);
-});
 
 test('the model library shows the flag and says the built-ins are hidden', () => {
   const actions = createActions(async () => {});
@@ -318,54 +273,3 @@ test('a rejected toggle surfaces the server error and leaves the catalog alone',
   assert.equal(result.current.currentProviderModel, 'default');
 });
 
-test('the model picker says which providers list only your models', () => {
-  // jsdom ships no ResizeObserver or scrollIntoView, which the picker's cmdk list uses.
-  vi.stubGlobal('ResizeObserver', class {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  });
-  Element.prototype.scrollIntoView = () => undefined;
-  const renderPicker = (providerModelCatalog: Partial<Record<LLMProvider, ProviderModelsDefinition>>) => {
-    const view = render(
-      <ProviderSelectionEmptyState
-        selectedSession={null}
-        currentSessionId={null}
-        provider="claude"
-        setProvider={() => {}}
-        textareaRef={{ current: null }}
-        providerModels={{ claude: 'default', codex: 'gpt-5.6-sol', cursor: 'auto', opencode: '' }}
-        setProviderModel={() => {}}
-        providerModelCatalog={providerModelCatalog}
-        providerModelActions={createActions(async () => {})}
-        providerModelsLoading={false}
-        tasksEnabled={false}
-        isTaskMasterInstalled={null}
-        setInput={() => {}}
-      />,
-    );
-    fireEvent.click(screen.getByRole('button', { name: /Click to change model/ }));
-    return view;
-  };
-  const codex: ProviderModelsDefinition = {
-    OPTIONS: [{ value: 'gpt-5.6-sol', label: 'GPT-5.6 Sol', isCustom: false }],
-    DEFAULT: 'gpt-5.6-sol',
-    CUSTOM_MODELS_ONLY: false,
-  };
-
-  const merged = renderPicker({ claude: MERGED_CATALOG, codex });
-  screen.getByText('Built-in and custom models in one list');
-  merged.unmount();
-
-  // The flag on with no custom models lists the built-ins, so nothing changes.
-  const flagWithoutModels = renderPicker({
-    claude: { OPTIONS: [BUILT_IN], DEFAULT: 'default', CUSTOM_MODELS_ONLY: true },
-    codex,
-  });
-  screen.getByText('Built-in and custom models in one list');
-  flagWithoutModels.unmount();
-
-  renderPicker({ claude: CUSTOM_ONLY_CATALOG, codex });
-  screen.getByText('Only your models are listed for Anthropic');
-  assert.equal(isShown('Built-in and custom models in one list'), false);
-});

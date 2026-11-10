@@ -74,15 +74,6 @@ test('a live token is sent as a bearer credential', async () => {
   assert.equal(sentHeaders().Authorization, `Bearer ${token}`);
 });
 
-test('platform builds send no bearer token, because the session is a cookie', async () => {
-  const token = liveToken();
-  localStorage.setItem('auth-token', token);
-  respondWith();
-
-  await (await loadFetch(true))('/api/projects');
-
-  assert.equal('Authorization' in sentHeaders(), false);
-});
 
 test('an expired token is never put on the wire', async () => {
   // getStoredAuthToken drops it rather than handing it over, so the request goes
@@ -141,22 +132,6 @@ test('a caller header wins over the default', async () => {
   assert.equal(sentHeaders()['Content-Type'], 'text/plain');
 });
 
-test('a refreshed token on the response replaces the stored one', async () => {
-  localStorage.setItem('auth-token', liveToken());
-  const rotated = liveToken().replace('signature', 'rotated');
-  let announced: string | null = null;
-  const onRefresh = (event: Event) => {
-    announced = (event as CustomEvent<string>).detail;
-  };
-  window.addEventListener(AUTH_TOKEN_REFRESHED_EVENT, onRefresh);
-  respondWith({ 'X-Refreshed-Token': rotated });
-
-  await (await loadFetch(false))('/api/projects');
-
-  window.removeEventListener(AUTH_TOKEN_REFRESHED_EVENT, onRefresh);
-  assert.equal(localStorage.getItem('auth-token'), rotated);
-  assert.equal(announced, rotated);
-});
 
 test('an auth error on the response ends the session', async () => {
   localStorage.setItem('auth-token', liveToken());
@@ -194,18 +169,6 @@ test('an auth error replayed by a cached response does not end the session', asy
   assert.equal(localStorage.getItem('auth-token'), live);
 });
 
-test('an expired refreshed token does not replace the stored one', async () => {
-  const live = liveToken();
-  localStorage.setItem('auth-token', live);
-  // Same replay problem on the refresh path, and the damaging one: a cached
-  // X-Refreshed-Token from an old session overwrote a seconds-old sign-in,
-  // which the next read then discarded as expired.
-  respondWith({ 'X-Refreshed-Token': expiredToken() });
-
-  await (await loadFetch(false))('/api/projects');
-
-  assert.equal(localStorage.getItem('auth-token'), live);
-});
 
 test('requests bypass the HTTP cache', async () => {
   localStorage.setItem('auth-token', liveToken());

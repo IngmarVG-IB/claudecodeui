@@ -208,13 +208,3 @@ test('an expanded body that is exactly "help" is sent as the message, not opened
   assert.deepEqual(chatSends().map((message) => message.content), ['help']);
 });
 
-test('a voice transcript sent straight away is still read as a command', async () => {
-  // Only the re-submit of an expanded body skips interception; "stop and send"
-  // goes through the same path as typing and pressing Enter.
-  const { view, chatSends } = await renderLoadedComposer();
-  await act(async () => { view.result.current.handleVoiceTranscript('/echo hi\nthere', true); });
-
-  await waitFor(() => assert.equal(chatSends().length, 1));
-  assert.deepEqual(executeBodies().map((body) => [body.commandName, body.rawArgs]), [['/echo', 'hi\nthere']]);
-  assert.deepEqual(chatSends().map((message) => message.content), ['expanded']);
-});

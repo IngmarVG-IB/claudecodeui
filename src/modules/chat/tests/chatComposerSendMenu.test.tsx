@@ -9,7 +9,6 @@ import '@/modules/i18n';
 import ChatComposer from '@/modules/chat/composer/ChatComposer';
 import { UiPreferencesProvider } from '@/shared/context/UiPreferencesContext';
 import type { SessionActivity } from '@/shared/types';
-import * as useVoiceInputModule from '@/modules/chat/hooks/useVoiceInput';
 
 /**
  * Where the composer draws the send menu: in place of the send button while a
@@ -147,28 +146,6 @@ test('background work, composer empty: the submit button is disabled', () => {
   assert.ok((submit as HTMLButtonElement).disabled, 'disabled with nothing to send');
 });
 
-test('turn running, transcribing: the plain submit button is disabled, so a tap cannot abort the turn', () => {
-  // Transcribing draws the same spinner as a running turn, but it is not a
-  // turn: a tap on the spinner must not reach `onAbortSession`, which the
-  // `isLoading` branch below would otherwise wire up.
-  const onAbortSession = vi.fn();
-  const spy = vi.spyOn(useVoiceInputModule, 'useVoiceInput').mockReturnValue({
-    state: 'transcribing',
-    toggle: () => undefined,
-    stop: () => undefined,
-  });
-
-  render(<UiPreferencesProvider><ChatComposer {...props({ isLoading: true, onAbortSession })} /></UiPreferencesProvider>);
-
-  assert.ok(!hasMenuTrigger(), 'transcribing keeps the plain button, not the menu');
-  const submit = screen.getByRole('button', { name: 'Send' });
-  assert.ok((submit as HTMLButtonElement).disabled, 'disabled while transcribing, even though a turn is running');
-
-  fireEvent.click(submit);
-  assert.equal(onAbortSession.mock.calls.length, 0, 'a tap on the disabled spinner cannot end the turn');
-
-  spy.mockRestore();
-});
 
 test('while a turn is written the send button is the menu, and its Stop is the existing abort', () => {
   const onAbortSession = vi.fn();

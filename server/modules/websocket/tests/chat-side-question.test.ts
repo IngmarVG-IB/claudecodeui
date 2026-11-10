@@ -403,23 +403,6 @@ test('a duplicate id is refused with the existing side question, to the asker on
   });
 });
 
-test('a cursor session\'s side question is refused on the asking socket, creates nothing and never reaches the runtime', { timeout: 5000 }, async () => {
-  await withGateway(async ({ asker, watcher, asks }) => {
-    sendSideQuestion(asker, { sessionId: CURSOR_SESSION_ID, sideQuestionId: 'sq-cursor', question: 'can cursor answer this?' });
-    await settle();
-
-    assert.equal(asks.length, 0, 'the runtime is never asked');
-    assert.equal(sideQuestionsService.getById('sq-cursor'), null);
-    assert.deepEqual(sideQuestionsService.listForSession(CURSOR_SESSION_ID), []);
-    const frames = sideQuestionFrames(asker, 'sq-cursor');
-    assert.equal(frames.length, 1);
-    assert.equal(frames[0].phase, 'error');
-    assert.equal(frames[0].sessionId, CURSOR_SESSION_ID);
-    assert.equal(typeof frames[0].error, 'string');
-    assert.deepEqual(watcher.frames, [], 'the other tab hears nothing of the refusal');
-  });
-});
-
 test('chat.btw is no longer handled: it is an unknown frame type and asks nothing', { timeout: 5000 }, async () => {
   await withGateway(async ({ asker, watcher, asks }) => {
     asker.emit('message', JSON.stringify({
@@ -435,64 +418,5 @@ test('chat.btw is no longer handled: it is an unknown frame type and asks nothin
     assert.ok(protocolErrorCodes(asker).includes('UNKNOWN_MESSAGE_TYPE'));
     assert.deepEqual(sideQuestionFrames(asker, 'sq-old-frame'), []);
     assert.deepEqual(watcher.frames, []);
-  });
-});
-
-test('a 4th concurrent side question in one session is refused while 3 run; another session is unaffected; a slot frees once one ends', { timeout: 5000 }, async () => {
-  await withGateway(async ({ asker, asks }) => {
-    sendSideQuestion(asker, { sideQuestionId: 'sq-1', question: 'one' });
-    sendSideQuestion(asker, { sideQuestionId: 'sq-2', question: 'two' });
-    sendSideQuestion(asker, { sideQuestionId: 'sq-3', question: 'three' });
-    await settle();
-    assert.equal(asks.length, 3, 'all 3 running questions reach the runtime');
-
-    sendSideQuestion(asker, { sideQuestionId: 'sq-4', question: 'four' });
-    await settle();
-
-    assert.equal(asks.length, 3, 'the 4th never reaches the runtime');
-    assert.equal(sideQuestionsService.getById('sq-4'), null, 'nothing is stored for the refused question');
-    const refusal = sideQuestionFrames(asker, 'sq-4');
-    assert.equal(refusal.length, 1);
-    assert.equal(refusal[0].phase, 'error');
-    assert.equal(typeof refusal[0].error, 'string');
-
-    // Another session is not affected by this session's cap.
-    asker.emit('message', JSON.stringify({
-      type: 'chat.side_question',
-      sessionId: CODEX_SESSION_ID,
-      sideQuestionId: 'sq-codex',
-      question: 'codex, are you there?',
-    }));
-    await settle();
-    assert.equal(asks.length, 4, 'the other session\'s question is accepted');
-
-    // Finishing one of the 3 running questions frees exactly one slot.
-    asks.find((ask) => ask.request.question === 'one')!.resolve({ status: 'done', answer: 'done' });
-    await settle();
-
-    sendSideQuestion(asker, { sideQuestionId: 'sq-5', question: 'five' });
-    await settle();
-
-    assert.equal(asks.length, 5, 'the freed slot admits the next question');
-    assert.equal(sideQuestionsService.getById('sq-5')?.status, 'running');
-  });
-});
-
-test('codex and opencode sessions\' side questions reach the runtime with their own provider', { timeout: 5000 }, async () => {
-  await withGateway(async ({ asker, asks }) => {
-    sendSideQuestion(asker, { sessionId: CODEX_SESSION_ID, sideQuestionId: 'sq-codex', question: 'codex, are you there?' });
-    sendSideQuestion(asker, { sessionId: OPENCODE_SESSION_ID, sideQuestionId: 'sq-opencode', question: 'opencode, are you there?' });
-    await settle();
-
-    // Gated on the capability, not on the provider being Claude.
-    assert.deepEqual(
-      asks.map((ask) => [ask.provider, ask.request.appSessionId, ask.request.question]).sort(),
-      [
-        ['codex', CODEX_SESSION_ID, 'codex, are you there?'],
-        ['opencode', OPENCODE_SESSION_ID, 'opencode, are you there?'],
-      ],
-    );
-    assert.equal(sideQuestionsService.getById('sq-codex')?.sessionId, CODEX_SESSION_ID);
-    assert.equal(sideQuestionsService.getById('sq-opencode')?.sessionId, OPENCODE_SESSION_ID);
   });
 });

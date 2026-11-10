@@ -10,6 +10,9 @@ import { WebSocket } from 'ws';
 
 import { handleShellConnection } from '@/modules/websocket/services/shell-websocket.service.js';
 
+// Sandlot: the shell launches the pinned CLAUDE_CLI_PATH (set by server/sandlot/test-env.ts), quoted.
+const CLAUDE = `'${fs.realpathSync(process.env.CLAUDE_CLI_PATH as string)}'`;
+
 function createFakeSocket() {
   const socket = new EventEmitter() as EventEmitter & {
     readyState: number;
@@ -122,78 +125,7 @@ test('shell output detects and normalizes a wrapped authentication URL', () => {
   pty.emitExit();
 });
 
-test('bypassPermissions launches claude with --dangerously-skip-permissions', () => {
-  const spawnedCommands: string[] = [];
-  const dependencies = {
-    resolveProviderSessionId: () => null,
-    spawnPty: (_shell: string, args: string | string[]) => {
-      spawnedCommands.push(Array.isArray(args) ? args[args.length - 1] : args);
-      return createFakePty() as never;
-    },
-  };
 
-  const bypassSocket = createFakeSocket();
-  handleShellConnection(bypassSocket as never, dependencies);
-  bypassSocket.emit(
-    'message',
-    JSON.stringify({
-      type: 'init',
-      projectPath: process.cwd(),
-      sessionId: `bypass-on-${Date.now()}`,
-      hasSession: false,
-      provider: 'claude',
-      bypassPermissions: true,
-    })
-  );
-
-  const defaultSocket = createFakeSocket();
-  handleShellConnection(defaultSocket as never, dependencies);
-  defaultSocket.emit(
-    'message',
-    JSON.stringify({
-      type: 'init',
-      projectPath: process.cwd(),
-      sessionId: `bypass-off-${Date.now()}`,
-      hasSession: false,
-      provider: 'claude',
-    })
-  );
-
-  assert.deepEqual(spawnedCommands, ['claude --dangerously-skip-permissions', 'claude']);
-});
-
-test('bypassPermissions carries through to resumed claude sessions', () => {
-  const spawnedCommands: string[] = [];
-  const dependencies = {
-    resolveProviderSessionId: () => 'resumed-session-id',
-    spawnPty: (_shell: string, args: string | string[]) => {
-      spawnedCommands.push(Array.isArray(args) ? args[args.length - 1] : args);
-      return createFakePty() as never;
-    },
-  };
-
-  const socket = createFakeSocket();
-  handleShellConnection(socket as never, dependencies);
-  socket.emit(
-    'message',
-    JSON.stringify({
-      type: 'init',
-      projectPath: process.cwd(),
-      sessionId: `bypass-resume-${Date.now()}`,
-      hasSession: true,
-      provider: 'claude',
-      bypassPermissions: true,
-    })
-  );
-
-  assert.equal(spawnedCommands.length, 1);
-  if (os.platform() !== 'win32') {
-    assert.equal(
-      spawnedCommands[0],
-      'claude --resume "resumed-session-id" --dangerously-skip-permissions || claude --dangerously-skip-permissions'
-    );
-  }
-});
 
 test('a missing project directory is reported as an error frame and starts no pty', () => {
   const socket = createFakeSocket();
@@ -332,7 +264,6 @@ test('a dark Shell tab launches claude exactly as before, whatever the user them
     const { calls, dependencies } = spawnRecorder('resumed-session-id');
 
     launch(dependencies, { provider: 'claude', colorScheme: 'dark' }, projectPath);
-    launch(dependencies, { provider: 'claude', colorScheme: 'dark', bypassPermissions: true }, projectPath);
     launch(dependencies, { provider: 'claude', colorScheme: 'dark', hasSession: true }, projectPath);
     launch(dependencies, { provider: 'claude' }, projectPath);
     launch(dependencies, { provider: 'claude', colorScheme: 'sepia' }, projectPath);
@@ -341,17 +272,16 @@ test('a dark Shell tab launches claude exactly as before, whatever the user them
       assert.deepEqual(
         calls.map((call) => call.command),
         [
-          'claude',
-          'claude --dangerously-skip-permissions',
-          'claude --resume "resumed-session-id" || claude',
-          'claude',
-          'claude',
+          CLAUDE,
+          `${CLAUDE} --resume "resumed-session-id" || ${CLAUDE}`,
+          CLAUDE,
+          CLAUDE,
         ]
       );
     }
     assert.equal(calls[0].env.COLORFGBG, '15;0');
+    assert.equal(calls[2].env.COLORFGBG, process.env.COLORFGBG);
     assert.equal(calls[3].env.COLORFGBG, process.env.COLORFGBG);
-    assert.equal(calls[4].env.COLORFGBG, process.env.COLORFGBG);
     assert.equal(fs.existsSync(path.join(home, '.cloudcli')), false, 'a dark launch writes no file');
   });
 });
@@ -377,7 +307,7 @@ test('a light Shell tab swaps a dark Claude theme for its light variant', () => 
 
       assert.equal(calls.length, 1);
       if (os.platform() !== 'win32') {
-        assert.equal(calls[0].command, `claude${themeFlag(expectedTheme)}`, `user theme ${userTheme}`);
+        assert.equal(calls[0].command, `${CLAUDE}${themeFlag(expectedTheme)}`, `user theme ${userTheme}`);
       }
       assert.deepEqual(JSON.parse(fs.readFileSync(themeSettingsPath(expectedTheme), 'utf8')), {
         theme: expectedTheme,
@@ -395,7 +325,7 @@ test('a light Shell tab keeps a light, auto or custom theme the user chose', () 
 
       launch(dependencies, { provider: 'claude', colorScheme: 'light' }, projectPath);
 
-      assert.deepEqual(calls.map((call) => call.command), ['claude'], `user theme ${userTheme}`);
+      assert.deepEqual(calls.map((call) => call.command), [CLAUDE], `user theme ${userTheme}`);
       assert.equal(calls[0].env.COLORFGBG, '0;15');
     });
   }
@@ -415,25 +345,25 @@ test('the Claude theme is read in the CLI order, including the legacy global con
 
   withClaudeConfig(({ configHome, projectPath, write }) => {
     write(path.join(configHome, '.claude.json'), { theme: 'dark-daltonized' });
-    assert.equal(lightLaunch(projectPath), `claude${themeFlag('light-daltonized')}`);
+    assert.equal(lightLaunch(projectPath), `${CLAUDE}${themeFlag('light-daltonized')}`);
 
     write(path.join(configHome, 'settings.json'), { theme: 'sepia' });
-    assert.equal(lightLaunch(projectPath), `claude${themeFlag('light-daltonized')}`, 'invalid value is unset');
+    assert.equal(lightLaunch(projectPath), `${CLAUDE}${themeFlag('light-daltonized')}`, 'invalid value is unset');
 
     write(path.join(configHome, 'settings.json'), { theme: 'dark-ansi' });
-    assert.equal(lightLaunch(projectPath), `claude${themeFlag('light-ansi')}`, 'settings beat legacy config');
+    assert.equal(lightLaunch(projectPath), `${CLAUDE}${themeFlag('light-ansi')}`, 'settings beat legacy config');
 
     write(path.join(projectPath, '.claude', 'settings.json'), { theme: 'light' });
-    assert.equal(lightLaunch(projectPath), 'claude', 'project settings beat user settings');
+    assert.equal(lightLaunch(projectPath), CLAUDE, 'project settings beat user settings');
 
     write(path.join(projectPath, '.claude', 'settings.local.json'), { theme: 'dark-daltonized' });
-    assert.equal(lightLaunch(projectPath), `claude${themeFlag('light-daltonized')}`, 'local beats project');
+    assert.equal(lightLaunch(projectPath), `${CLAUDE}${themeFlag('light-daltonized')}`, 'local beats project');
   });
 
   withClaudeConfig(({ configHome, projectPath, write }) => {
     write(path.join(configHome, '.claude.json'), { theme: 'dark-daltonized' });
     write(path.join(configHome, '.config.json'), { theme: 'dark-ansi' });
-    assert.equal(lightLaunch(projectPath), `claude${themeFlag('light-ansi')}`, 'legacy .config.json wins');
+    assert.equal(lightLaunch(projectPath), `${CLAUDE}${themeFlag('light-ansi')}`, 'legacy .config.json wins');
   });
 
   // Without CLAUDE_CONFIG_DIR the CLI reads ~/.claude/settings.json and ~/.claude.json.
@@ -441,10 +371,10 @@ test('the Claude theme is read in the CLI order, including the legacy global con
     delete process.env.CLAUDE_CONFIG_DIR;
     const home = process.env.HOME as string;
     write(path.join(home, '.claude.json'), { theme: 'dark-ansi' });
-    assert.equal(lightLaunch(projectPath), `claude${themeFlag('light-ansi')}`);
+    assert.equal(lightLaunch(projectPath), `${CLAUDE}${themeFlag('light-ansi')}`);
 
     write(path.join(home, '.claude', 'settings.json'), { theme: 'light-daltonized' });
-    assert.equal(lightLaunch(projectPath), 'claude');
+    assert.equal(lightLaunch(projectPath), CLAUDE);
   });
 });
 
@@ -461,7 +391,7 @@ test('an unreadable or unparsable Claude config counts as unset and never blocks
 
     assert.equal(calls.length, 1);
     if (os.platform() !== 'win32') {
-      assert.equal(calls[0].command, `claude${themeFlag('light')}`);
+      assert.equal(calls[0].command, `${CLAUDE}${themeFlag('light')}`);
     }
     const frames = socket.frames.map((frame) => JSON.parse(frame) as { type: string });
     assert.deepEqual(frames.map((frame) => frame.type), ['output', 'claude_theme']);
@@ -496,7 +426,7 @@ test('a Claude config that is not a regular file is skipped without being opened
       const socket = launch(dependencies, { provider: 'claude', colorScheme: 'light' }, projectPath);
 
       assert.ok(Date.now() - startedAt < 1000, 'the launch did not wait for the FIFO');
-      assert.deepEqual(calls.map((call) => call.command), [`claude${themeFlag('light')}`]);
+      assert.deepEqual(calls.map((call) => call.command), [`${CLAUDE}${themeFlag('light')}`]);
       const frames = socket.frames.map((frame) => JSON.parse(frame) as { type: string });
       assert.deepEqual(frames.map((frame) => frame.type), ['output', 'claude_theme']);
     } finally {
@@ -521,7 +451,7 @@ test('an oversized Claude config is skipped without being read', (t) => {
     assert.equal(readPaths.includes(settingsPath), false, 'the oversized file was read');
     assert.equal(calls.length, 1);
     if (os.platform() !== 'win32') {
-      assert.equal(calls[0].command, `claude${themeFlag('light')}`);
+      assert.equal(calls[0].command, `${CLAUDE}${themeFlag('light')}`);
     }
   });
 });
@@ -539,25 +469,25 @@ test('the legacy global config may be bigger than a settings file', () => {
 
     assert.equal(calls.length, 1);
     if (os.platform() !== 'win32') {
-      assert.equal(calls[0].command, `claude${themeFlag('light-daltonized')}`);
+      assert.equal(calls[0].command, `${CLAUDE}${themeFlag('light-daltonized')}`);
     }
   });
 });
 
-test('the light theme rides along with bypass and resume launches', () => {
+test('the light theme rides along with resume launches', () => {
   withClaudeConfig(({ projectPath }) => {
     const { calls, dependencies } = spawnRecorder('resumed-session-id');
 
     launch(
       dependencies,
-      { hasSession: true, provider: 'claude', bypassPermissions: true, colorScheme: 'light' },
+      { provider: 'claude', colorScheme: 'light', hasSession: true, sessionId: 'app-session-id' },
       projectPath
     );
 
     assert.equal(calls.length, 1);
     if (os.platform() !== 'win32') {
-      const flags = ` --dangerously-skip-permissions${themeFlag('light')}`;
-      assert.equal(calls[0].command, `claude --resume "resumed-session-id"${flags} || claude${flags}`);
+      const flags = themeFlag('light');
+      assert.equal(calls[0].command, `${CLAUDE} --resume "resumed-session-id"${flags} || ${CLAUDE}${flags}`);
     }
   });
 });
@@ -614,13 +544,13 @@ test('the settings file path is quoted for bash and for PowerShell', (t) => {
     const powerShellFlag = ` --settings '${settingsPath.replace(/['\u2019]/g, '$&$&')}'`;
     assert.ok(settingsPath.includes("it's a \u2019quoted\u2019 home"), settingsPath);
     assert.deepEqual(calls.map((call) => [call.shell, ...call.args]), [
-      ['bash', '-c', `claude${bashFlag}`],
-      ['bash', '-c', `claude --resume "resumed-session-id"${bashFlag} || claude${bashFlag}`],
-      ['powershell.exe', '-Command', `claude${powerShellFlag}`],
+      ['bash', '-c', `${CLAUDE}${bashFlag}`],
+      ['bash', '-c', `${CLAUDE} --resume "resumed-session-id"${bashFlag} || ${CLAUDE}${bashFlag}`],
+      ['powershell.exe', '-Command', `& ${CLAUDE}${powerShellFlag}`],
       [
         'powershell.exe',
         '-Command',
-        `claude --resume "resumed-session-id"${powerShellFlag}; if ($LASTEXITCODE -ne 0) { claude${powerShellFlag} }`,
+        `& ${CLAUDE} --resume "resumed-session-id"${powerShellFlag}; if ($LASTEXITCODE -ne 0) { & ${CLAUDE}${powerShellFlag} }`,
       ],
     ]);
     // Spelled out once, so the escaping above is not only checked against itself.
@@ -640,7 +570,7 @@ test('a settings file that cannot be written drops the flag, logs once and still
     const firstSocket = launch(dependencies, { provider: 'claude', colorScheme: 'light' }, projectPath);
     const secondSocket = launch(dependencies, { provider: 'claude', colorScheme: 'light' }, projectPath);
 
-    assert.deepEqual(calls.map((call) => call.command), ['claude', 'claude']);
+    assert.deepEqual(calls.map((call) => call.command), [CLAUDE, CLAUDE]);
     assert.deepEqual(calls.map((call) => call.env.COLORFGBG), ['0;15', '0;15']);
     // The CLI paints its dark default in either app theme, so no restart hint.
     for (const socket of [firstSocket, secondSocket]) {
@@ -686,10 +616,9 @@ test('claude launches report the app theme they started in, also on reattach', (
     const silentLaunches = [
       launch(dependencies, { provider: 'claude' }, projectPath),
       launch(dependencies, { provider: 'claude', initialCommand: 'claude /login', colorScheme: 'light' }, projectPath),
-      launch(dependencies, { provider: 'codex', colorScheme: 'light' }, projectPath),
       launch(dependencies, { provider: 'plain-shell', isPlainShell: true, colorScheme: 'light' }, projectPath),
     ];
-    assert.deepEqual(silentLaunches.map(themeFrames), [[], [], [], []]);
+    assert.deepEqual(silentLaunches.map(themeFrames), [[], [], []]);
   });
 });
 
@@ -733,16 +662,14 @@ test('other shells and initial commands only get the COLORFGBG hint', () => {
       projectPath
     );
     launch(dependencies, { provider: 'claude', initialCommand: loginCommand, colorScheme: 'light' }, projectPath);
-    launch(dependencies, { provider: 'codex', colorScheme: 'light' }, projectPath);
-    launch(dependencies, { provider: 'codex', colorScheme: 'dark' }, projectPath);
 
     assert.deepEqual(
       calls.map((call) => call.command),
-      ['npx task-master init', loginCommand, 'codex', 'codex']
+      ['npx task-master init', loginCommand]
     );
     assert.deepEqual(
       calls.map((call) => call.env.COLORFGBG),
-      ['0;15', '0;15', '0;15', '15;0']
+      ['0;15', '0;15']
     );
   });
 });

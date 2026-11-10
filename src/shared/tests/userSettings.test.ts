@@ -146,10 +146,10 @@ test('hydrate splits the legacy claude-settings blob into permissions and sort o
   const store = await loadStore();
   await store.hydrateUserPreferences();
 
+  // Sandlot: a legacy skipPermissions flag is not carried over.
   assert.deepEqual(store.readUserPreference('claudePermissions', null), {
     allowedTools: ['Read'],
     disallowedTools: ['Bash'],
-    skipPermissions: true,
   });
   assert.equal(store.readUserPreference('projectSortOrder', 'name'), 'date');
 });

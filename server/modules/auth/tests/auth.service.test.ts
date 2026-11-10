@@ -7,23 +7,19 @@ import { createAuthService } from '../auth.service.js';
 
 type AuthDependencies = Parameters<typeof createAuthService>[0];
 
-function createDependencies(overrides: Partial<AuthDependencies> = {}): AuthDependencies & { delays: number } {
-  const state = { delays: 0 };
-  const dependencies = {
+const delayCounter = { count: 0 };
+
+function createDependencies(overrides: Partial<AuthDependencies> = {}): AuthDependencies {
+  return {
     getUser: () => ({ id: 1, username: 'sandlot' }),
     verifyPassword: (password: string) => password === 'right',
     updateLastLogin: () => undefined,
     generateToken: () => 'signed-token',
     failureDelay: async () => {
-      state.delays += 1;
+      delayCounter.count += 1;
     },
     ...overrides,
   };
-  return Object.assign(dependencies, {
-    get delays() {
-      return state.delays;
-    },
-  });
 }
 
 test('status never asks for setup in Sandlot mode', () => {
@@ -41,12 +37,12 @@ test('login with the right password returns a token for the single user', async 
 });
 
 test('login with a wrong password is a 401 after the failure delay', async () => {
-  const dependencies = createDependencies();
-  const service = createAuthService(dependencies);
+  const service = createAuthService(createDependencies());
+  const before = delayCounter.count;
   await assert.rejects(service.login('wrong'), (error: unknown) => (
     error instanceof AppError && error.statusCode === 401 && error.code === 'AUTH_INVALID_CREDENTIALS'
   ));
-  assert.equal(dependencies.delays, 1);
+  assert.equal(delayCounter.count, before + 1);
 });
 
 test('login without a password is a 400', async () => {

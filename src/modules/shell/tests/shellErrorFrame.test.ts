@@ -12,7 +12,7 @@ import type { Project, ProjectSession } from '@/shared/types';
 // what is under test is how a parsed frame is dispatched.
 vi.mock('@/modules/shell/utils/socket', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  getShellWebSocketUrl: () => 'ws://localhost/shell',
+  getShellWebSocketTarget: () => ({ url: 'ws://localhost/shell', protocols: [] }),
 }));
 
 class FakeSocket {
@@ -58,7 +58,6 @@ function renderConnection() {
       selectedSessionRef: ref<ProjectSession | null | undefined>(null),
       initialCommandRef: ref<string | null | undefined>(null),
       isPlainShellRef: ref(false),
-      bypassPermissionsRef: ref(false),
       isDarkModeRef: ref(true),
       onProcessCompleteRef: ref<((exitCode: number) => void) | null | undefined>(null),
       isInitialized: true,

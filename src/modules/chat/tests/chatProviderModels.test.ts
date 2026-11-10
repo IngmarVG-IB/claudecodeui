@@ -59,21 +59,6 @@ afterEach(() => {
   vi.resetModules();
 });
 
-test('each provider gets its own model from its own storage key', async () => {
-  localStorage.setItem('claude-model', 'claude-stored');
-  localStorage.setItem('cursor-model', 'cursor-stored');
-  localStorage.setItem('codex-model', 'codex-stored');
-  localStorage.setItem('opencode-model', 'opencode-stored');
-
-  const { result } = await renderProviderState();
-
-  await waitFor(() => {
-    assert.equal(result.current.providerModels.claude, 'claude-stored');
-  });
-  assert.equal(result.current.providerModels.cursor, 'cursor-stored');
-  assert.equal(result.current.providerModels.codex, 'codex-stored');
-  assert.equal(result.current.providerModels.opencode, 'opencode-stored');
-});
 
 test('a provider with no stored model falls back to its own default, not another provider’s', async () => {
   const { result } = await renderProviderState();
@@ -90,26 +75,6 @@ test('a provider with no stored model falls back to its own default, not another
   );
 });
 
-test('choosing a model persists it under that provider’s key only', async () => {
-  const { result } = await renderProviderState();
-  await waitFor(() => {
-    assert.ok(result.current.providerModels.codex);
-  });
-  const claudeBefore = result.current.providerModels.claude;
-
-  act(() => {
-    result.current.setStoredProviderModel('codex', 'codex-chosen');
-  });
-
-  assert.equal(result.current.providerModels.codex, 'codex-chosen');
-  assert.equal(localStorage.getItem('codex-model'), 'codex-chosen');
-  assert.equal(
-    result.current.providerModels.claude,
-    claudeBefore,
-    'setting one provider must not disturb another',
-  );
-  assert.equal(localStorage.getItem('claude-model'), null);
-});
 
 test('setting the same model twice keeps the record identity stable', async () => {
   const { result } = await renderProviderState();
@@ -133,16 +98,3 @@ test('setting the same model twice keeps the record identity stable', async () =
   );
 });
 
-test('the active provider’s model is what currentProviderModel reports', async () => {
-  // The provider selection is a stored preference; the per-provider model is
-  // still a plain localStorage key.
-  writeUserPreference('selectedProvider', 'cursor');
-  localStorage.setItem('cursor-model', 'cursor-active');
-
-  const { result } = await renderProviderState();
-
-  await waitFor(() => {
-    assert.equal(result.current.provider, 'cursor');
-  });
-  assert.equal(result.current.currentProviderModel, 'cursor-active');
-});

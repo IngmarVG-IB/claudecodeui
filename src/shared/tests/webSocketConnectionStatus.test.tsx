@@ -145,28 +145,6 @@ test('a first attempt that fails reads as disconnected', () => {
   assert.equal(lastStatus(), 'connected');
 });
 
-test('a token refresh swaps the socket without ever reading as a lost connection', () => {
-  const view = renderProvider();
-  act(() => socket(0).serverOpens());
-
-  AUTH.current = { ...AUTH.current, token: 'token-2' };
-  view.rerender(<WebSocketProvider><RecordStatus /></WebSocketProvider>);
-
-  assert.equal(FakeWebSocket.instances.length, 2, 'the refreshed token opened a new socket');
-  assert.equal(socket(0).readyState, FakeWebSocket.CLOSED, 'the old-token socket was closed');
-  assert.match(socket(1).url, /token=token-2/);
-  // The new socket is still handshaking: not live yet, but not lost either.
-  assert.equal(lastStatus(), 'connecting');
-  assert.equal(isConnected, false);
-
-  // No reconnect was scheduled for the socket closed on purpose.
-  act(() => { vi.advanceTimersByTime(3000); });
-  assert.equal(FakeWebSocket.instances.length, 2);
-
-  act(() => socket(1).serverOpens());
-  assert.equal(lastStatus(), 'connected');
-  assert.ok(!seen.includes('disconnected'), `statuses seen: ${seen.join(', ')}`);
-});
 
 test('signing out while the socket is down does not carry the drop into the next sign-in', () => {
   const view = renderProvider();

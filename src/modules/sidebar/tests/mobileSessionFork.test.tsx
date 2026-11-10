@@ -86,7 +86,7 @@ const openOptions = async () => {
   return within(screen.getByRole('dialog'));
 };
 
-test.each<LLMProvider>(['claude', 'codex'])('mobile offers a fork for a supported %s session', async (provider) => {
+test.each<LLMProvider>(['claude'])('mobile offers a fork for a supported %s session', async (provider) => {
   render(<SidebarSessionItem {...rowProps({ session: { ...SESSION, __provider: provider } })} />);
   const sheet = await openOptions();
 
@@ -139,12 +139,6 @@ test('forking from the mobile sheet passes the owning session once and dismisses
   assert.equal(screen.getByRole('button', { name: 'Session options for Session one' }).getAttribute('aria-expanded'), 'false');
 });
 
-test.each<LLMProvider>(['cursor', 'opencode'])('mobile withholds a fork when %s is unsupported or absent from the matrix', async (provider) => {
-  render(<SidebarSessionItem {...rowProps({ session: { ...SESSION, __provider: provider } })} />);
-  const sheet = await openOptions();
-
-  assert.equal(sheet.queryByRole('button', { name: /Fork session/ }), null);
-});
 
 test('mobile withholds a fork when its caller provides no fork handler', async () => {
   render(<SidebarSessionItem {...rowProps({ onForkSession: undefined })} />);

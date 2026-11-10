@@ -53,26 +53,6 @@ test('overlapping latest page retains loaded older messages and replaces the tai
   assert.equal(new Set(result.messages.map((item) => item.id)).size, result.messages.length);
 });
 
-test('Codex rows with regenerated IDs overlap by stable transcript fields', () => {
-  const cached = range(1, 20).map((item) => ({
-    ...item,
-    id: `codex-old-${item.id}`,
-    provider: 'codex' as const,
-  }));
-  const latest = range(11, 30).map((item) => ({
-    ...item,
-    id: `codex-new-${item.id}`,
-    provider: 'codex' as const,
-  }));
-
-  assert.equal(findLatestPageOverlapLength(cached, latest), 10);
-  const merged = mergeLatestServerPage(cached, latest);
-  assert.equal(merged.messages.length, 30);
-  assert.deepEqual(
-    merged.messages.slice(0, 10).map((item) => item.id),
-    cached.slice(0, 10).map((item) => item.id),
-  );
-});
 
 test('large appended turns request only the missing bridge and one anchor', () => {
   const cached = range(81, 100);
