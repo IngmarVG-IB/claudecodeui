@@ -1,11 +1,10 @@
+import { APP_VERSION } from '@/shared/constants';
 import { memo, useCallback, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useDeviceSettings } from '@/shared/hooks/useDeviceSettings';
-import { useVersionCheck } from '@/shared/hooks/useVersionCheck';
 import { useUiPreferences, useSetUiPreference } from '@/shared/context/UiPreferencesContext';
 import { useSidebarController } from '@/modules/sidebar/hooks/useSidebarController';
-import { useTaskMaster, useTasksSettings } from '@/modules/task-master';
 import { usePaletteOps } from '@/modules/command-palette';
 import { useBackgroundSessionIdSet, useBusySessionIdSet } from '@/shared/context/SessionProtectionContext';
 import type { LLMProvider, LoadingProgress, MCPServerStatus, Project, ProjectSession, SidebarProjectListProps } from '@/shared/types';
@@ -36,11 +35,6 @@ type SidebarProps = {
   isMobile: boolean;
 };
 
-type TaskMasterSidebarContext = {
-  setCurrentProject: (project: Project) => void;
-  mcpServerStatus: MCPServerStatus;
-};
-
 /** Exported through the sidebar barrel; the project-workspace module renders it as the app's project and session navigation panel. */
 function Sidebar({
   projects,
@@ -64,15 +58,18 @@ function Sidebar({
 }: SidebarProps) {
   const { t } = useTranslation(['sidebar', 'common']);
   const { isPWA } = useDeviceSettings({ trackMobile: false });
-  const { updateAvailable, restartRequired, latestVersion, currentVersion, releaseInfo, installMode } = useVersionCheck(
-    'siteboon',
-    'claudecodeui',
-  );
+  // Sandlot build: no update check. The workspace image pins this version.
+  const updateAvailable = false;
+  const restartRequired = false;
+  const latestVersion: string | null = null;
+  const currentVersion = APP_VERSION;
+  const releaseInfo = null;
   const preferences = useUiPreferences();
   const setPreference = useSetUiPreference();
   const { sidebarVisible } = preferences;
-  const { setCurrentProject, mcpServerStatus } = useTaskMaster() as TaskMasterSidebarContext;
-  const { tasksEnabled } = useTasksSettings();
+  // TaskMaster is not part of the Sandlot build.
+  const tasksEnabled = false;
+  const mcpServerStatus: MCPServerStatus = null;
   const paletteOps = usePaletteOps();
   // Only membership is rendered here, so subscribing to the full activity map
   // would re-render the whole tree on every provider status frame.
@@ -162,7 +159,6 @@ function Sidebar({
     onSessionDelete,
     onLoadMoreSessions,
     onProjectDelete,
-    setCurrentProject,
     setSidebarVisible: (visible) => setPreference('sidebarVisible', visible),
     sidebarVisible,
     keepProjectsExpanded: preferences.keepProjectsExpanded,
@@ -254,12 +250,6 @@ function Sidebar({
         onConfirmDeleteProject={confirmDeleteProject}
         onConfirmDeleteSession={confirmDeleteSession}
         onConfirmDeleteSessions={confirmDeleteSessions}
-        showVersionModal={showVersionModal}
-        onCloseVersionModal={() => setShowVersionModal(false)}
-        releaseInfo={releaseInfo}
-        currentVersion={currentVersion}
-        latestVersion={latestVersion}
-        installMode={installMode}
         t={t}
       />
 

@@ -1,10 +1,8 @@
 import {
   expireAuthSession,
   getStoredAuthToken,
-  storeAuthToken,
 } from '@/shared/authToken';
-import { IS_PLATFORM } from '@/shared/utils';
-import { readVoiceConfig, voiceConfigHeaders } from '@/shared/voiceConfig';
+import { withBasePath } from '@/shared/basePath';
 
 // Headers are a plain record rather than the full `HeadersInit` union so the
 // defaults below can be merged with a caller's headers by spreading.
@@ -26,11 +24,12 @@ export const authenticatedFetch = (
     defaultHeaders['Content-Type'] = 'application/json';
   }
 
-  if (!IS_PLATFORM && token) {
+  if (token) {
     defaultHeaders['Authorization'] = `Bearer ${token}`;
   }
 
-  return fetch(url, {
+  // Root-relative URLs ('/api/...') go under CLOUDCLI_BASE_PATH.
+  return fetch(withBasePath(url), {
     ...options,
     // Every response here can carry X-Refreshed-Token or X-Auth-Error, and a
     // served-from-cache response replays the headers it was stored with. Those
@@ -43,10 +42,6 @@ export const authenticatedFetch = (
       ...options.headers,
     },
   }).then((response) => {
-    const refreshedToken = response.headers.get('X-Refreshed-Token');
-    if (refreshedToken) {
-      storeAuthToken(refreshedToken);
-    }
     // Belt and braces for any path that still reaches a cached response: only a
     // real rejection ends the session. Note that a revalidated response surfaces
     // its stored status (typically 200), not the 304 from the wire, so the
@@ -200,18 +195,14 @@ const pluginAssetPath = (pluginName: string, assetFile: string) =>
 export const api = {
   // Auth endpoints (no token required)
   auth: {
-    status: () => fetch('/api/auth/status'),
-    login: (username: string, password: string) => fetch('/api/auth/login', {
+    status: () => fetch(withBasePath('/api/auth/status'), { cache: 'no-store' }),
+    // Sandlot mode: single user, password only (the server compares its SHA-256).
+    login: (password: string) => fetch(withBasePath('/api/auth/login'), {
       method: 'POST',
+      cache: 'no-store',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ password }),
     }),
-    register: (username: string, password: string) => fetch('/api/auth/register', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password }),
-    }),
-    refresh: () => post('/api/auth/refresh'),
     user: () => get('/api/auth/user'),
   },
 
@@ -244,24 +235,11 @@ export const api = {
     post('/api/projects/migrate-legacy-stars', { projectIds }),
   toggleProjectStar: (projectId: string) =>
     post(`/api/projects/${encodeURIComponent(projectId)}/toggle-star`),
-  // A clone is two requests: the details (GitHub token included) go in this
-  // POST body, and the returned `cloneId` is all the progress stream's URL
-  // carries — URLs land in access logs, proxy logs and browser history.
-  startProjectClone: (cloneRequest: {
-    path: string;
-    githubUrl: string;
-    githubTokenId: number | null;
-    newGithubToken: string | null;
-  }) => post('/api/projects/clone', cloneRequest),
-  // EventSource cannot send an Authorization header, so the token rides along as
-  // a query parameter on the streaming endpoints below.
-  cloneProjectProgressUrl: ({ cloneId }: { cloneId: string }) =>
-    `/api/projects/clone-progress${query({ cloneId, token: getStoredAuthToken() })}`,
+  // Read with AuthenticatedEventSource, which sends the token in a header.
   searchConversationsUrl: (searchQuery: string, limit = 50) =>
     `/api/providers/search/sessions${query({
       q: searchQuery,
       limit,
-      token: getStoredAuthToken(),
     })}`,
 
   // Session endpoints. Provider/project metadata are resolved by the backend
@@ -506,22 +484,6 @@ export const api = {
   },
 
   // TaskMaster endpoints — all addressed by DB projectId post-migration.
-  taskmaster: {
-    // Update a task
-    updateTask: (projectId: string, taskId: string | number, updates: unknown) =>
-      put(`/api/taskmaster/update-task/${projectId}/${taskId}`, updates),
-
-    tasks: (projectId: string) => get(`/api/taskmaster/tasks/${encodeURIComponent(projectId)}`),
-    mcpStatus: () => get('/api/taskmaster/mcp-status'),
-    installationStatus: () => get('/api/taskmaster/installation-status'),
-
-    prdFiles: (projectId: string) => get(`/api/taskmaster/prd/${encodeURIComponent(projectId)}`),
-    prdFile: (projectId: string, fileName: string) =>
-      get(`/api/taskmaster/prd/${encodeURIComponent(projectId)}/${encodeURIComponent(fileName)}`),
-    savePrd: (projectId: string, { fileName, content }: { fileName: string; content: string }) =>
-      post(`/api/taskmaster/prd/${encodeURIComponent(projectId)}`, { fileName, content }),
-  },
-
   // User endpoints
   user: {
     gitConfig: () => get('/api/user/git-config'),
@@ -548,163 +510,7 @@ export const api = {
     clearQueuedMessage: (scope: string) => del('/api/user/drafts/queued-message', { scope }),
   },
 
-  // Server-side settings: API keys, stored credentials, notifications, web push
-  settings: {
-    apiKeys: () => get('/api/settings/api-keys'),
-    createApiKey: (keyName: string) => post('/api/settings/api-keys', { keyName }),
-    deleteApiKey: (keyId: string) => del(`/api/settings/api-keys/${keyId}`),
-    toggleApiKey: (keyId: string, isActive: boolean) =>
-      patch(`/api/settings/api-keys/${keyId}/toggle`, { isActive }),
-
-    credentials: (type: string) => get(`/api/settings/credentials${query({ type })}`),
-    createCredential: (payload: {
-      credentialName: string;
-      credentialType: string;
-      credentialValue: string;
-      description?: string;
-    }) => post('/api/settings/credentials', payload),
-    deleteCredential: (credentialId: string) => del(`/api/settings/credentials/${credentialId}`),
-    toggleCredential: (credentialId: string, isActive: boolean) =>
-      patch(`/api/settings/credentials/${credentialId}/toggle`, { isActive }),
-
-    notificationPreferences: () => get('/api/settings/notification-preferences'),
-    saveNotificationPreferences: (preferences: unknown) =>
-      put('/api/settings/notification-preferences', preferences),
-
-    push: {
-      vapidPublicKey: () => get('/api/settings/push/vapid-public-key'),
-      subscribe: (subscription: { endpoint?: string; keys?: unknown }) =>
-        post('/api/settings/push/subscribe', subscription),
-      unsubscribe: (endpoint: string) => post('/api/settings/push/unsubscribe', { endpoint }),
-    },
-
-    // Outbound webhook for run lifecycle events. `createSecret` is the only
-    // response that ever carries the signing secret.
-    notificationWebhook: {
-      get: () => get('/api/notifications/webhook'),
-      save: (config: { url: string; allowHttp: boolean; enabled: boolean }) =>
-        put('/api/notifications/webhook', config),
-      remove: () => del('/api/notifications/webhook'),
-      createSecret: () => post('/api/notifications/webhook/secret'),
-      removeSecret: () => del('/api/notifications/webhook/secret'),
-      sendTest: () => post('/api/notifications/webhook/test'),
-    },
-  },
-
-  plugins: {
-    list: () => get('/api/plugins'),
-    install: (url: string) => post('/api/plugins/install', { url }),
-    uninstall: (name: string) => del(`/api/plugins/${encodeURIComponent(name)}`),
-    update: (name: string) => post(`/api/plugins/${encodeURIComponent(name)}/update`),
-    toggle: (name: string, enabled: boolean) =>
-      put(`/api/plugins/${encodeURIComponent(name)}/enable`, { enabled }),
-    // Plugin bundles/icons are fetched with auth headers and handed to the
-    // browser as blobs, so a bare asset URL is never requested unauthenticated.
-    asset: (pluginName: string, assetFile: string) => get(pluginAssetPath(pluginName, assetFile)),
-    // Exposed so the icon cache can key on the resolved asset path.
-    assetUrl: pluginAssetPath,
-    rpc: (pluginName: string, method: string, path: string, body?: unknown) =>
-      authenticatedFetch(
-        `/api/plugins/${encodeURIComponent(pluginName)}/rpc/${String(path).replace(/^\//, '')}`,
-        {
-          method: method || 'GET',
-          ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-        },
-      ),
-  },
-
-  browserUse: {
-    status: () => get('/api/browser-use/status'),
-    settings: () => get('/api/browser-use/settings'),
-    saveSettings: (settings: unknown) => put('/api/browser-use/settings', settings),
-    sessions: () => get('/api/browser-use/sessions'),
-    stopSession: (sessionId: string) => post(`/api/browser-use/sessions/${sessionId}/stop`),
-    deleteSession: (sessionId: string) => del(`/api/browser-use/sessions/${sessionId}`),
-    sendInput: (sessionId: string, input: unknown) => post(`/api/browser-use/sessions/${sessionId}/input`, input),
-    installRuntime: () => post('/api/browser-use/runtime/install'),
-  },
-
-  voice: {
-    health: () => get('/api/voice/health'),
-    transcribe: (formData: FormData, headers: Record<string, string> = {}) =>
-      authenticatedFetch('/api/voice/transcribe', {
-        method: 'POST',
-        headers,
-        body: formData,
-      }),
-    tts: (text: string, options: ApiRequestOptions = {}) => post('/api/voice/tts', { text }, options),
-  },
-
-  system: {
-    update: () => post('/api/system/update'),
-  },
 };
 
 // ---------------------------
 
-//----------------- VOICE TRANSCRIPTION AND SPEECH ------------
-
-/**
- * Builds a URL against the user's own OpenAI-compatible voice endpoint. Private to the
- * voice helpers below, which bypass the CloudCLI proxy when a base URL is configured.
- */
-function voiceDirectUrl(baseUrl: string, path: string): string {
-  return `${baseUrl.replace(/\/$/, '')}${path}`;
-}
-
-/**
- * Serializes the active voice configuration so callers can detect a settings change and
- * drop cached synthesized audio.
- */
-export function voiceConfigSignature(): string {
-  return JSON.stringify(readVoiceConfig());
-}
-
-/**
- * Transcribes recorded audio, posting directly to the user's configured OpenAI-compatible
- * endpoint when one is set and otherwise going through the CloudCLI voice proxy.
- */
-export function transcribeVoice(blob: Blob, filename: string): Promise<Response> {
-  const config = readVoiceConfig();
-  const body = new FormData();
-
-  if (config.baseUrl.trim()) {
-    body.append('file', blob, filename);
-    body.append('model', config.sttModel || 'whisper-1');
-    return fetch(voiceDirectUrl(config.baseUrl.trim(), '/audio/transcriptions'), {
-      method: 'POST',
-      headers: config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {},
-      body,
-    });
-  }
-
-  body.append('audio', blob, filename);
-  return api.voice.transcribe(body, voiceConfigHeaders());
-}
-
-/**
- * Synthesizes speech for the given text, using the user's configured OpenAI-compatible
- * endpoint when one is set and otherwise the CloudCLI voice proxy.
- */
-export function synthesizeVoice(text: string, signal: AbortSignal): Promise<Response> {
-  const config = readVoiceConfig();
-
-  if (config.baseUrl.trim()) {
-    return fetch(voiceDirectUrl(config.baseUrl.trim(), '/audio/speech'), {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {}),
-      },
-      body: JSON.stringify({
-        model: config.ttsModel || 'tts-1',
-        voice: config.ttsVoice || 'alloy',
-        input: text,
-        ...(config.ttsFormat.trim() ? { response_format: config.ttsFormat.trim() } : {}),
-      }),
-      signal,
-    });
-  }
-
-  return api.voice.tts(text, { headers: voiceConfigHeaders(), signal });
-}

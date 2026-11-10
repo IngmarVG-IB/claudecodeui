@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AuthenticatedEventSource } from '@/shared/authenticatedEventSource';
 import type { TFunction } from 'i18next';
 
 import { api } from '@/shared/api';
@@ -71,7 +72,6 @@ type UseSidebarControllerArgs = {
   onLoadMoreSessions?: (projectId: string) => Promise<void> | void;
   // `projectId` is the DB-assigned identifier; callbacks use that post-migration.
   onProjectDelete?: (projectId: string) => void;
-  setCurrentProject: (project: Project) => void;
   setSidebarVisible: (visible: boolean) => void;
   sidebarVisible: boolean;
   keepProjectsExpanded?: boolean;
@@ -93,7 +93,6 @@ export function useSidebarController({
   onSessionDelete,
   onLoadMoreSessions,
   onProjectDelete,
-  setCurrentProject,
   setSidebarVisible,
   sidebarVisible,
   keepProjectsExpanded = false,
@@ -183,7 +182,7 @@ export function useSidebarController({
   const projectIdsLoadingMoreSessionsRef = useRef<Set<string>>(new Set());
   const searchSeqRef = useRef(0);
   const recentConversationsSeqRef = useRef(0);
-  const eventSourceRef = useRef<EventSource | null>(null);
+  const eventSourceRef = useRef<AuthenticatedEventSource | null>(null);
   const starToggleSequenceByProjectRef = useRef<Map<string, number>>(new Map());
   const migrationStartedRef = useRef(false);
   const onRefreshRef = useRef(onRefresh);
@@ -504,7 +503,7 @@ export function useSidebarController({
     }
 
     const url = api.searchConversationsUrl(query);
-    const es = new EventSource(url);
+    const es = new AuthenticatedEventSource(url);
     eventSourceRef.current = es;
 
     const accumulated: ConversationProjectResult[] = [];
@@ -514,7 +513,7 @@ export function useSidebarController({
     es.addEventListener('title-results', (evt) => {
       if (seq !== searchSeqRef.current) { es.close(); return; }
       try {
-        const data = JSON.parse(evt.data) as { titleResults: SessionTitleSearchResult[] };
+        const data = JSON.parse((evt as MessageEvent).data) as { titleResults: SessionTitleSearchResult[] };
         titleResults = Array.isArray(data.titleResults) ? data.titleResults : [];
         setConversationResults({
           results: [...accumulated],
@@ -530,7 +529,7 @@ export function useSidebarController({
     es.addEventListener('result', (evt) => {
       if (seq !== searchSeqRef.current) { es.close(); return; }
       try {
-        const data = JSON.parse(evt.data) as {
+        const data = JSON.parse((evt as MessageEvent).data) as {
           projectResult: ConversationProjectResult;
           totalMatches: number;
           scannedProjects: number;
@@ -553,7 +552,7 @@ export function useSidebarController({
     es.addEventListener('progress', (evt) => {
       if (seq !== searchSeqRef.current) { es.close(); return; }
       try {
-        const data = JSON.parse(evt.data) as { totalMatches: number; scannedProjects: number; totalProjects: number };
+        const data = JSON.parse((evt as MessageEvent).data) as { totalMatches: number; scannedProjects: number; totalProjects: number };
         totalMatches = data.totalMatches;
         setSearchProgress({ scannedProjects: data.scannedProjects, totalProjects: data.totalProjects });
       } catch {
@@ -1137,9 +1136,8 @@ export function useSidebarController({
   const handleProjectSelect = useCallback(
     (project: Project) => {
       onProjectSelect(project);
-      setCurrentProject(project);
     },
-    [onProjectSelect, setCurrentProject],
+    [onProjectSelect],
   );
 
   const openArchivedSession = useCallback((session: ArchivedSessionListItem) => {

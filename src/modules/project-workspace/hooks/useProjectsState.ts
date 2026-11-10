@@ -1039,10 +1039,6 @@ export function useProjectsState({
       clearSessionAttention(session.id);
       setSelectedSession(session);
 
-      if (activeTab === 'tasks' || activeTab === 'browser') {
-        setActiveTab('chat');
-      }
-
       if (isMobile) {
         // Sessions are tagged with the owning project's DB `projectId` when
         // picked from the sidebar (see useSidebarController); compare against

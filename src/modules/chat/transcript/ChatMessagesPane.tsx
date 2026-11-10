@@ -47,9 +47,6 @@ type ChatMessagesPaneProps = {
   providerModelCatalog: Partial<Record<LLMProvider, ProviderModelsDefinition>>;
   providerModelActions: ProviderModelActions;
   providerModelsLoading: boolean;
-  tasksEnabled: boolean;
-  isTaskMasterInstalled: boolean | null;
-  onShowAllTasks?: (() => void) | null;
   setInput: Dispatch<SetStateAction<string>>;
   isLoadingMoreMessages: boolean;
   hasMoreMessages: boolean;
@@ -116,9 +113,6 @@ function ChatMessagesPane({
   providerModelCatalog,
   providerModelActions,
   providerModelsLoading,
-  tasksEnabled,
-  isTaskMasterInstalled,
-  onShowAllTasks,
   setInput,
   isLoadingMoreMessages,
   hasMoreMessages,
@@ -239,9 +233,6 @@ function ChatMessagesPane({
           providerModelCatalog={providerModelCatalog}
           providerModelActions={providerModelActions}
           providerModelsLoading={providerModelsLoading}
-          tasksEnabled={tasksEnabled}
-          isTaskMasterInstalled={isTaskMasterInstalled}
-          onShowAllTasks={onShowAllTasks}
           setInput={setInput}
         />
       ) : (

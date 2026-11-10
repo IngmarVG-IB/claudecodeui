@@ -1,4 +1,4 @@
-import { IS_PLATFORM } from '@/shared/utils';
+import { WEBSOCKET_AUTH_PROTOCOL, webSocketUrl } from '@/shared/basePath';
 import { getStoredAuthToken } from '@/shared/authToken';
 
 type ShellInitMessage = {
@@ -12,7 +12,6 @@ type ShellInitMessage = {
   initialCommand: string | null | undefined;
   isPlainShell: boolean;
   forceRestart?: boolean;
-  bypassPermissions?: boolean;
   // The app theme at launch, so the server can start a CLI in the colour scheme
   // the terminal is painted in.
   colorScheme?: 'light' | 'dark';
@@ -42,20 +41,20 @@ type ShellIncomingMessage =
   | { type: 'claude_theme'; colorScheme?: string }
   | { type: string; [key: string]: unknown };
 
-export function getShellWebSocketUrl(): string | null {
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+export type ShellWebSocketTarget = { url: string; protocols: string[] };
 
-  if (IS_PLATFORM) {
-    return `${protocol}//${window.location.host}/shell`;
-  }
-
+/**
+ * URL and subprotocols for the shell socket. The JWT rides in
+ * Sec-WebSocket-Protocol, never in the URL (see shared/basePath.ts).
+ */
+export function getShellWebSocketTarget(): ShellWebSocketTarget | null {
   const token = getStoredAuthToken();
   if (!token) {
     console.error('No authentication token found for Shell WebSocket connection');
     return null;
   }
 
-  return `${protocol}//${window.location.host}/shell?token=${encodeURIComponent(token)}`;
+  return { url: webSocketUrl('/shell'), protocols: [WEBSOCKET_AUTH_PROTOCOL, token] };
 }
 
 export function parseShellMessage(payload: string): ShellIncomingMessage | null {

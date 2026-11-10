@@ -18,11 +18,6 @@ type ShellHeaderProps = {
   restartLabel: string;
   restartTitle: string;
   disableRestart: boolean;
-  showBypassToggle: boolean;
-  bypassEnabled: boolean;
-  onToggleBypass: () => void;
-  bypassLabel: string;
-  bypassTitle: string;
 };
 
 /** Rendered by Shell above the terminal to show connection status, the restart/disconnect actions and the theme restart hint. */
@@ -44,11 +39,6 @@ export default function ShellHeader({
   restartLabel,
   restartTitle,
   disableRestart,
-  showBypassToggle,
-  bypassEnabled,
-  onToggleBypass,
-  bypassLabel,
-  bypassTitle,
 }: ShellHeaderProps) {
   return (
     <div className="flex-shrink-0 border-b border-border bg-card px-4 py-2">
@@ -68,27 +58,6 @@ export default function ShellHeader({
         </div>
 
         <div className="flex items-center gap-2">
-          {showBypassToggle && (
-            <button
-              type="button"
-              onClick={onToggleBypass}
-              aria-pressed={bypassEnabled}
-              className={`inline-flex h-8 items-center gap-1.5 rounded-md border px-3 text-xs font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-card ${
-                bypassEnabled
-                  ? 'border-orange-700 bg-orange-700 text-white hover:bg-orange-800 focus:ring-orange-400/70 dark:border-orange-500/70 dark:bg-orange-600/80 dark:hover:bg-orange-700'
-                  : 'border-input bg-background text-foreground shadow-sm hover:border-orange-700 hover:bg-orange-700 hover:text-white focus:ring-orange-400/70 dark:hover:border-orange-400/70 dark:hover:bg-orange-600/60'
-              }`}
-              title={bypassTitle}
-            >
-              {bypassEnabled ? (
-                <ShieldOff className="h-3.5 w-3.5" aria-hidden="true" />
-              ) : (
-                <Shield className="h-3.5 w-3.5" aria-hidden="true" />
-              )}
-              <span>{bypassLabel}</span>
-            </button>
-          )}
-
           {isConnected && (
             <button
               type="button"

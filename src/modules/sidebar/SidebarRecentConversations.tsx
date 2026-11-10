@@ -1,4 +1,5 @@
 import { Loader2, MessageSquare } from 'lucide-react';
+import { withBasePath } from '@/shared/basePath';
 import type { MouseEvent } from 'react';
 import type { TFunction } from 'i18next';
 
@@ -153,7 +154,7 @@ export default function SidebarRecentConversations({
               )}
 
               <a
-                href={`/session/${conversation.sessionId}`}
+                href={withBasePath(`/session/${conversation.sessionId}`)}
                 onClick={handleClick}
                 data-testid="recent-conversation-row"
                 className={cn(

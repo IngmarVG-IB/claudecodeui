@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
 import { useAuth } from '@/modules/auth';
-import { IS_PLATFORM } from '@/shared/utils';
+import { WEBSOCKET_AUTH_PROTOCOL, webSocketUrl } from '@/shared/basePath';
 import { expireAuthSession, isAuthTokenExpired } from '@/shared/authToken';
 import type { ServerEvent } from '@/shared/types';
 
@@ -49,15 +49,14 @@ export const useWebSocket = () => {
   return context;
 };
 
-const buildWebSocketUrl = (token: string | null) => {
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  if (IS_PLATFORM) return `${protocol}//${window.location.host}/ws`; // Platform mode: Use same domain as the page (goes through proxy)
+// The JWT rides in Sec-WebSocket-Protocol, never in the URL (see shared/basePath.ts).
+const buildWebSocketTarget = (token: string | null): { url: string; protocols: string[] } | null => {
   if (!token) return null;
   if (isAuthTokenExpired(token)) {
     expireAuthSession();
     return null;
   }
-  return `${protocol}//${window.location.host}/ws?token=${encodeURIComponent(token)}`; // OSS mode: Use same host:port that served the page
+  return { url: webSocketUrl('/ws'), protocols: [WEBSOCKET_AUTH_PROTOCOL, token] };
 };
 
 const useWebSocketProviderState = (): WebSocketContextType => {
@@ -91,14 +90,14 @@ const useWebSocketProviderState = (): WebSocketContextType => {
   // without reading the `connect` binding while it is still initializing.
   const connect = useCallback(function connect() {
     if (unmountedRef.current) return; // Prevent connection if unmounted
-    if (!IS_PLATFORM && (isAuthLoading || !user)) return;
+    if (isAuthLoading || !user) return;
     try {
       // Construct WebSocket URL
-      const wsUrl = buildWebSocketUrl(token);
+      const wsTarget = buildWebSocketTarget(token);
 
-      if (!wsUrl) return console.warn('No authentication token found for WebSocket connection');
+      if (!wsTarget) return console.warn('No authentication token found for WebSocket connection');
 
-      const websocket = new WebSocket(wsUrl);
+      const websocket = new WebSocket(wsTarget.url, wsTarget.protocols);
       // Store connecting sockets too, so a token refresh can close them before
       // their handshake completes with stale credentials.
       wsRef.current = websocket;
@@ -156,7 +155,7 @@ const useWebSocketProviderState = (): WebSocketContextType => {
     // re-run of the effect (e.g. on token refresh) would short-circuit connect()
     // at its unmounted guard and leave the socket permanently disconnected.
     unmountedRef.current = false;
-    if (!IS_PLATFORM && (isAuthLoading || !user)) {
+    if (isAuthLoading || !user) {
       return undefined;
     }
     connect();

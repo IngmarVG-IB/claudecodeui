@@ -16,11 +16,13 @@ import '@/modules/i18n'
 // `localStorage.setItem('react-scan', 'on')` and reload.
 scan({ enabled: import.meta.env.DEV && localStorage.getItem('react-scan') === 'on' })
 
-// Register service worker for PWA + Web Push support
+// The Sandlot build registers no service worker: it has no Web Push, and an
+// offline cache under a proxied path prefix would outlive image updates. A worker
+// left by an earlier build is removed.
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('/sw.js').catch(err => {
-    console.warn('Service worker registration failed:', err);
-  });
+  void navigator.serviceWorker.getRegistrations()
+    .then((registrations) => Promise.all(registrations.map((registration) => registration.unregister())))
+    .catch(() => {});
 }
 
 const rootElement = document.getElementById('root')

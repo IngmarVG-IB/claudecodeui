@@ -235,8 +235,8 @@ function readLegacyPreference(key: UserPreferenceKey): unknown {
     }
     // The sort order rides along in the same legacy blob but is its own
     // preference now, so it is deliberately not copied into the permissions.
-    const { allowedTools, disallowedTools, skipPermissions } = parsed;
-    return { allowedTools, disallowedTools, skipPermissions };
+    const { allowedTools, disallowedTools } = parsed;
+    return { allowedTools, disallowedTools };
   }
 
   return parsed;

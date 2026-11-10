@@ -1,4 +1,5 @@
 import { memo, useState } from 'react';
+import { withBasePath } from '@/shared/basePath';
 import type { KeyboardEvent } from 'react';
 import { Archive, Check, CheckSquare, Edit2, GitBranch, Loader2, MoreHorizontal, Square, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
@@ -421,7 +422,7 @@ function SidebarSessionItem({
       {!isCompact && (
       <div>
         <a
-          href={`/session/${session.id}`}
+          href={withBasePath(`/session/${session.id}`)}
           role={isSelecting ? 'checkbox' : undefined}
           aria-checked={isSelecting ? isChecked : undefined}
           aria-disabled={isSelecting && !isSelectable ? true : undefined}

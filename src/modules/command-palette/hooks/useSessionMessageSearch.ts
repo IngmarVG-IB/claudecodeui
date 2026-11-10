@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { AuthenticatedEventSource } from '@/shared/authenticatedEventSource';
 
 import { api } from '@/shared/api';
 import type { LLMProvider } from '@/shared/types';
@@ -31,7 +32,7 @@ export function useSessionMessageSearch(
 ) {
   const [items, setItems] = useState<SessionMessageMatch[]>([]);
   const seqRef = useRef(0);
-  const esRef = useRef<EventSource | null>(null);
+  const esRef = useRef<AuthenticatedEventSource | null>(null);
 
   useEffect(() => {
     const trimmed = query.trim();
@@ -49,7 +50,7 @@ export function useSessionMessageSearch(
     const handle = setTimeout(() => {
       const seq = ++seqRef.current;
       const url = api.searchConversationsUrl(trimmed);
-      const es = new EventSource(url);
+      const es = new AuthenticatedEventSource(url);
       esRef.current = es;
       const accumulated: SessionMessageMatch[] = [];
 

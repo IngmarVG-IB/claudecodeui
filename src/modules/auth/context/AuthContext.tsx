@@ -2,9 +2,8 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { useTranslation } from 'react-i18next';
 import type { ReactNode } from 'react';
 
-import { IS_PLATFORM } from '@/shared/utils';
 import { api, readApiErrorMessage } from '@/shared/api';
-import { AUTH_SESSION_EXPIRED_EVENT, AUTH_TOKEN_REFRESHED_EVENT, getAuthTokenRefreshDelay, isValidRefreshedToken, storeAuthToken } from '@/shared/authToken';
+import { AUTH_SESSION_EXPIRED_EVENT, storeAuthToken } from '@/shared/authToken';
 import { hydrateChatDrafts, resetChatDrafts } from '@/shared/chatDrafts';
 import { hydrateUserPreferences, resetUserPreferences } from '@/shared/userSettings';
 /** The signed-in account held by AuthContext - a required `username` plus an optional id and any additional fields the auth API returns - and should be read through `useAuth()` rather than re-derived from raw auth responses. */
@@ -19,7 +18,6 @@ const AUTH_TOKEN_STORAGE_KEY = 'auth-token';
 const AUTH_ERROR_MESSAGES = {
   authStatusCheckFailed: 'errors.authStatusCheckFailed',
   loginFailed: 'errors.loginFailed',
-  registrationFailed: 'errors.registrationFailed',
   networkError: 'errors.networkError',
   sessionExpired: 'errors.sessionExpired',
 } as const;
@@ -50,8 +48,7 @@ type AuthContextValue = {
   needsSetup: boolean;
   hasCompletedOnboarding: boolean;
   error: string | null;
-  login: (username: string, password: string) => Promise<AuthActionResult>;
-  register: (username: string, password: string) => Promise<AuthActionResult>;
+  login: (password: string) => Promise<AuthActionResult>;
   logout: () => void;
   refreshOnboardingStatus: () => Promise<void>;
 };
@@ -141,45 +138,14 @@ export function AuthProvider({ children }: AuthProviderProps) {
     await checkOnboardingStatus();
   }, [checkOnboardingStatus]);
 
-  const refreshSession = useCallback(async () => {
-    if (IS_PLATFORM || !token || !user) {
-      return;
-    }
-
-    try {
-      const response = await api.auth.refresh();
-      if (!response.ok) {
-        return;
-      }
-
-      const payload = await parseJsonSafely<AuthSessionPayload>(response);
-      if (isValidRefreshedToken(payload?.token)) {
-        setToken(payload.token);
-        persistToken(payload.token);
-      }
-    } catch (caughtError) {
-      // A transient network failure must not sign the user out. Focus/visibility
-      // and the next scheduled refresh will retry while the token remains valid.
-      console.warn('[Auth] Session refresh failed:', caughtError);
-    }
-  }, [token, user]);
-
   useEffect(() => {
-    const handleTokenRefreshed = (event: Event) => {
-      const nextToken = (event as CustomEvent<unknown>).detail;
-      if (isValidRefreshedToken(nextToken)) {
-        setToken(nextToken);
-      }
-    };
     const handleSessionExpired = () => {
       clearSession();
       setError(t(AUTH_ERROR_MESSAGES.sessionExpired));
     };
 
-    window.addEventListener(AUTH_TOKEN_REFRESHED_EVENT, handleTokenRefreshed);
     window.addEventListener(AUTH_SESSION_EXPIRED_EVENT, handleSessionExpired);
     return () => {
-      window.removeEventListener(AUTH_TOKEN_REFRESHED_EVENT, handleTokenRefreshed);
       window.removeEventListener(AUTH_SESSION_EXPIRED_EVENT, handleSessionExpired);
     };
   }, [clearSession, t]);
@@ -240,51 +206,13 @@ export function AuthProvider({ children }: AuthProviderProps) {
   }, [checkOnboardingStatus, clearSession]);
 
   useEffect(() => {
-    if (IS_PLATFORM) {
-      setUser({ username: 'platform-user' });
-      setNeedsSetup(false);
-      void checkOnboardingStatus().finally(() => {
-        setIsLoading(false);
-      });
-      return;
-    }
-
     void checkAuthStatus();
-  }, [checkAuthStatus, checkOnboardingStatus]);
+  }, [checkAuthStatus]);
 
-  useEffect(() => {
-    if (IS_PLATFORM || !token || !user) {
-      return undefined;
-    }
-
-    const refreshIfNeeded = () => {
-      const refreshDelay = getAuthTokenRefreshDelay(token);
-      if (refreshDelay !== null && refreshDelay <= 0) {
-        void refreshSession();
-      }
-    };
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        refreshIfNeeded();
-      }
-    };
-
-    const refreshDelay = getAuthTokenRefreshDelay(token);
-    const refreshTimer = refreshDelay === null
-      ? null
-      : window.setTimeout(() => void refreshSession(), refreshDelay);
-
-    window.addEventListener('focus', refreshIfNeeded);
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-
-    return () => {
-      if (refreshTimer !== null) {
-        window.clearTimeout(refreshTimer);
-      }
-      window.removeEventListener('focus', refreshIfNeeded);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
-  }, [refreshSession, token, user]);
+  // Sandlot: no token refresh. A token expires 12 hours after sign-in and the
+  // server's secret lives only in its process memory, so a restart signs
+  // everyone out too; either way the next request returns 401 and the session
+  // expires to the login screen.
 
   // ProtectedRoute shows the workspace as soon as there is a user, so the
   // onboarding status is settled before the user is published; otherwise a
@@ -300,10 +228,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
   }, [checkOnboardingStatus]);
 
   const login = useCallback<AuthContextValue['login']>(
-    async (username, password) => {
+    async (password) => {
       try {
         setError(null);
-        const response = await api.auth.login(username, password);
+        const response = await api.auth.login(password);
         const payload = await parseJsonSafely<AuthSessionPayload>(response);
 
         if (!response.ok || !payload?.token || !payload.user) {
@@ -318,30 +246,6 @@ export function AuthProvider({ children }: AuthProviderProps) {
         return { success: true };
       } catch (caughtError) {
         console.error('Login error:', caughtError);
-        setError(t(AUTH_ERROR_MESSAGES.networkError));
-        return { success: false, error: t(AUTH_ERROR_MESSAGES.networkError) };
-      }
-    },
-    [publishSession, t],
-  );
-
-  const register = useCallback<AuthContextValue['register']>(
-    async (username, password) => {
-      try {
-        setError(null);
-        const response = await api.auth.register(username, password);
-        const payload = await parseJsonSafely<AuthSessionPayload>(response);
-
-        if (!response.ok || !payload?.token || !payload.user) {
-          const message = readApiErrorMessage(payload) ?? t(AUTH_ERROR_MESSAGES.registrationFailed);
-          setError(message);
-          return { success: false, error: message };
-        }
-
-        await publishSession(payload.user, payload.token);
-        return { success: true };
-      } catch (caughtError) {
-        console.error('Registration error:', caughtError);
         setError(t(AUTH_ERROR_MESSAGES.networkError));
         return { success: false, error: t(AUTH_ERROR_MESSAGES.networkError) };
       }
@@ -364,7 +268,6 @@ export function AuthProvider({ children }: AuthProviderProps) {
       hasCompletedOnboarding,
       error,
       login,
-      register,
       logout,
       refreshOnboardingStatus,
     }),
@@ -376,7 +279,6 @@ export function AuthProvider({ children }: AuthProviderProps) {
       logout,
       needsSetup,
       refreshOnboardingStatus,
-      register,
       token,
       user,
     ],

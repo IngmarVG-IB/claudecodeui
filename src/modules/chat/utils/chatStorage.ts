@@ -55,7 +55,6 @@ export function getClaudeSettings(): ClaudeSettings {
   return {
     allowedTools: Array.isArray(stored.allowedTools) ? stored.allowedTools : [],
     disallowedTools: Array.isArray(stored.disallowedTools) ? stored.disallowedTools : [],
-    skipPermissions: Boolean(stored.skipPermissions),
     projectSortOrder: readUserPreference<ClaudeSettings['projectSortOrder']>('projectSortOrder', 'name'),
   };
 }
@@ -64,7 +63,6 @@ export function getClaudeSettings(): ClaudeSettings {
 export function saveClaudePermissions(permissions: {
   allowedTools: string[];
   disallowedTools: string[];
-  skipPermissions: boolean;
 }): void {
   writeUserPreference('claudePermissions', permissions);
 }

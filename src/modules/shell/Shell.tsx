@@ -49,11 +49,6 @@ export default function Shell({
 }: ShellProps) {
   const { t } = useTranslation('chat');
   const [isRestarting, setIsRestarting] = useState(false);
-  // Seeded from the chat composer's persisted permission setting; the header
-  // toggle only changes this shell's launches, not the chat setting.
-  const [bypassPermissions, setBypassPermissions] = useState(
-    () => getClaudeSettings().skipPermissions,
-  );
   const [cliPromptOptions, setCliPromptOptions] = useState<CliPromptOption[] | null>(null);
   const promptCheckTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const restartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -75,7 +70,6 @@ export default function Shell({
     selectedSession,
     initialCommand,
     isPlainShell,
-    bypassPermissions,
     minimal,
     autoConnect,
     isRestarting,
@@ -220,13 +214,6 @@ export default function Shell({
     ? 'plain-shell'
     : selectedSession?.__provider || readSelectedProvider();
 
-  const handleToggleBypassPermissions = useCallback(() => {
-    setBypassPermissions((enabled) => !enabled);
-    // The flag only applies at launch, so a running CLI must be restarted.
-    if (isConnected) {
-      handleRestartShell();
-    }
-  }, [handleRestartShell, isConnected]);
 
   const handleDisconnectShell = useCallback(() => {
     restartAfterInitRef.current = false;
@@ -315,13 +302,6 @@ export default function Shell({
         restartLabel={t('shell.actions.restart')}
         restartTitle={t('shell.actions.restartTitle')}
         disableRestart={isRestarting || !isInitialized}
-        showBypassToggle={shellProvider === 'claude'}
-        bypassEnabled={bypassPermissions}
-        onToggleBypass={handleToggleBypassPermissions}
-        bypassLabel={t('shell.actions.bypass')}
-        bypassTitle={t(
-          bypassPermissions ? 'shell.actions.bypassOnTitle' : 'shell.actions.bypassOffTitle',
-        )}
       />
 
       <div className="relative flex-1 overflow-hidden p-2">

@@ -9,11 +9,11 @@ import { getConnectableHost, normalizeLoopbackHost } from './shared/networkHosts
 // injecting it keeps the frontend free of imports that reach outside src/.
 const pkg = createRequire(import.meta.url)('./package.json')
 
-export default defineConfig(({ mode }) => {
+export default defineConfig(({ command, mode }) => {
   // Load env file based on `mode` in the current working directory.
   const env = loadEnv(mode, process.cwd(), '')
 
-  const configuredHost = env.HOST || '0.0.0.0'
+  const configuredHost = env.HOST || '127.0.0.1'
   // if the host is not a loopback address, it should be used directly. 
   // This allows the vite server to EXPOSE all interfaces when the host 
   // is set to '0.0.0.0' or '::', while still using 'localhost' for browser 
@@ -25,6 +25,11 @@ export default defineConfig(({ mode }) => {
   const serverPort = env.SERVER_PORT || env.PORT || 3001
 
   return {
+    // Relative asset URLs in the build: the server serves the app under
+    // CLOUDCLI_BASE_PATH (e.g. /absproxy/8091) and rewrites index.html's
+    // "./" references to that prefix at request time, while chunks, CSS and
+    // fonts resolve relative to the module that loads them.
+    base: command === 'build' ? './' : '/',
     plugins: [react()],
     define: {
       __APP_VERSION__: JSON.stringify(pkg.version)
@@ -44,10 +49,6 @@ export default defineConfig(({ mode }) => {
           ws: true
         },
         '/shell': {
-          target: `ws://${proxyHost}:${serverPort}`,
-          ws: true
-        },
-        '/plugin-ws': {
           target: `ws://${proxyHost}:${serverPort}`,
           ws: true
         }

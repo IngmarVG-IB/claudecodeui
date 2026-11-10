@@ -5,7 +5,7 @@ import type { Terminal } from '@xterm/xterm';
 
 import type { Project, ProjectSession } from '@/shared/types';
 import { TERMINAL_INIT_DELAY_MS } from '@/shared/constants';
-import { getShellWebSocketUrl, parseShellMessage, sendSocketMessage } from '@/modules/shell/utils/socket';
+import { getShellWebSocketTarget, parseShellMessage, sendSocketMessage } from '@/modules/shell/utils/socket';
 import { readSelectedProvider } from '@/shared/selectedProvider';
 
 const ANSI_ESCAPE_REGEX =
@@ -20,7 +20,6 @@ type UseShellConnectionOptions = {
   selectedSessionRef: MutableRefObject<ProjectSession | null | undefined>;
   initialCommandRef: MutableRefObject<string | null | undefined>;
   isPlainShellRef: MutableRefObject<boolean>;
-  bypassPermissionsRef: MutableRefObject<boolean>;
   isDarkModeRef: MutableRefObject<boolean>;
   onProcessCompleteRef: MutableRefObject<((exitCode: number) => void) | null | undefined>;
   isInitialized: boolean;
@@ -47,7 +46,6 @@ export function useShellConnection({
   selectedSessionRef,
   initialCommandRef,
   isPlainShellRef,
-  bypassPermissionsRef,
   isDarkModeRef,
   onProcessCompleteRef,
   isInitialized,
@@ -136,8 +134,8 @@ export function useShellConnection({
       }
 
       try {
-        const wsUrl = getShellWebSocketUrl();
-        if (!wsUrl) {
+        const wsTarget = getShellWebSocketTarget();
+        if (!wsTarget) {
           connectingRef.current = false;
           setIsConnecting(false);
           return;
@@ -145,7 +143,7 @@ export function useShellConnection({
 
         connectingRef.current = true;
 
-        const socket = new WebSocket(wsUrl);
+        const socket = new WebSocket(wsTarget.url, wsTarget.protocols);
         wsRef.current = socket;
 
         socket.onopen = () => {
@@ -176,9 +174,6 @@ export function useShellConnection({
               initialCommand: initialCommandRef.current,
               isPlainShell: isPlainShellRef.current,
               forceRestart,
-              // Launch-time flag: bypass mode can only join the CLI's
-              // shift+tab cycle when claude starts with it.
-              bypassPermissions: bypassPermissionsRef.current,
               // Launch-time too: a CLI picks its colours when it starts.
               colorScheme: isDarkModeRef.current ? 'dark' : 'light',
             });
@@ -211,8 +206,7 @@ export function useShellConnection({
       }
     },
     [
-      bypassPermissionsRef,
-      clearTerminalScreen,
+          clearTerminalScreen,
       fitAddonRef,
       handleSocketMessage,
       initialCommandRef,

@@ -1,7 +1,7 @@
 import { useCallback, useState } from 'react';
 import type { FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Loader2, Lock, User } from 'lucide-react';
+import { Loader2, Lock } from 'lucide-react';
 
 import { useAuth } from '@/modules/auth/context/AuthContext';
 import AuthErrorAlert from '@/modules/auth/AuthErrorAlert';
@@ -9,18 +9,17 @@ import AuthInputField from '@/modules/auth/AuthInputField';
 import AuthScreenLayout from '@/modules/auth/AuthScreenLayout';
 
 type LoginFormState = {
-  username: string;
   password: string;
 };
 
 const initialState: LoginFormState = {
-  username: '',
   password: '',
 };
 
 /**
  * Login form component.
  * Rendered by the auth module's ProtectedRoute when no user session exists.
+ * Sandlot mode is single-user, so there is a password and no username.
  * Handles credential input with browser autofill support (`autocomplete`
  * attributes) so that password managers can offer to fill saved credentials.
  */
@@ -42,19 +41,19 @@ export default function LoginForm() {
       setErrorMessage('');
 
       // Keep form validation local so each auth screen owns its own UI feedback.
-      if (!formState.username.trim() || !formState.password) {
+      if (!formState.password) {
         setErrorMessage(t('login.errors.requiredFields'));
         return;
       }
 
       setIsSubmitting(true);
-      const result = await login(formState.username.trim(), formState.password);
+      const result = await login(formState.password);
       if (!result.success) {
         setErrorMessage(result.error);
       }
       setIsSubmitting(false);
     },
-    [formState.password, formState.username, login, t],
+    [formState.password, login, t],
   );
 
   return (
@@ -64,17 +63,6 @@ export default function LoginForm() {
       footerText={t('login.footerText')}
     >
       <form onSubmit={handleSubmit} className="space-y-4">
-        <AuthInputField
-          id="username"
-          label={t('login.username')}
-          value={formState.username}
-          onChange={(value) => updateField('username', value)}
-          placeholder={t('login.placeholders.username')}
-          isDisabled={isSubmitting}
-          autoComplete="username"
-          icon={User}
-        />
-
         <AuthInputField
           id="password"
           label={t('login.password')}

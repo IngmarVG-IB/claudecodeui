@@ -744,7 +744,6 @@ export function useChatComposerState({
       {
         allowedTools: [],
         disallowedTools: [],
-        skipPermissions: false,
       },
     );
 
@@ -755,7 +754,6 @@ export function useChatComposerState({
       effort: currentProviderEffort,
       permissionMode: resolvePermissionModeForProvider(provider, permissionMode),
       toolsSettings,
-      skipPermissions: toolsSettings?.skipPermissions || false,
       sessionSummary: getNotificationSessionSummary(selectedSession, currentInput),
     };
   }, [
@@ -1566,17 +1564,6 @@ export function useChatComposerState({
     setQueuedDraft(null);
   }, []);
 
-  // A voice transcript either fills the input (to edit before sending) or, when the
-  // user tapped "stop and send", is submitted straight away. Mirror the value into
-  // inputValueRef synchronously so handleSubmit reads the new text, not the stale state.
-  const handleVoiceTranscript = useCallback((text: string, send?: boolean) => {
-    const base = inputValueRef.current.trim();
-    const next = base ? `${base} ${text}` : text;
-    setInput(next);
-    inputValueRef.current = next;
-    if (send) handleSubmitRef.current?.(createFakeSubmitEvent());
-  }, [setInput]);
-
   useEffect(() => {
     inputValueRef.current = input;
   }, [input]);
@@ -1893,7 +1880,6 @@ export function useChatComposerState({
     deleteQueuedDraft,
     pendingSteers: visiblePendingSteers,
     handleSteerOutcome,
-    handleVoiceTranscript,
     handleInputChange,
     handleKeyDown,
     handlePaste,

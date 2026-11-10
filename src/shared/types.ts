@@ -5,7 +5,7 @@ import type { NavigateFunction } from 'react-router-dom';
 //----------------- LLM PROVIDER MODEL CATALOG ------------
 
 /** Identifies which coding-agent CLI backs a session, project selection or model list. */
-export type LLMProvider = 'claude' | 'cursor' | 'codex' | 'opencode';
+export type LLMProvider = 'claude';
 
 /** One selectable model in a provider's model menu, including its optional reasoning-effort choices. */
 export type ProviderModelOption = {
@@ -69,7 +69,7 @@ export type ProviderModelActions = {
 //----------------- PROJECTS AND SESSIONS ------------
 
 /** Identifies the workspace pane the user is looking at; plugin panes are namespaced by plugin id. */
-export type AppTab = 'chat' | 'files' | 'shell' | 'git' | 'tasks' | 'browser' | `plugin:${string}`;
+export type AppTab = 'chat' | 'files' | 'shell' | 'git';
 
 /** A message queued to be sent to a session at a future time. */
 export type ScheduledMessage = {
@@ -289,8 +289,8 @@ export type QueueItemStatus = 'completed' | 'in_progress' | 'pending';
 
 //----------------- CHAT MESSAGES AND PERMISSIONS ------------
 
-/** Permission preset a provider runs a turn under ('default', 'acceptEdits', 'auto', 'bypassPermissions' or 'plan'), chosen in the composer and sent with each message; the backend capability matrix decides which values a given provider accepts. */
-export type PermissionMode = 'default' | 'acceptEdits' | 'auto' | 'bypassPermissions' | 'plan';
+/** Permission preset a provider runs a turn under ('default', 'acceptEdits' or 'plan'; Sandlot builds have no 'auto' or 'bypassPermissions'), chosen in the composer and sent with each message; the backend capability matrix decides which values a given provider accepts. */
+export type PermissionMode = 'default' | 'acceptEdits' | 'plan';
 
 /** A non-image file attached to a chat message, described by its path in the server-managed attachment store plus display metadata so it can be listed and downloaded. */
 export type ChatAttachment = {
@@ -423,11 +423,10 @@ export type ChatMessage = {
   [key: string]: unknown;
 };
 
-/** The user's locally persisted Claude preferences (allowed and disallowed tool lists, permission skipping and project sort order) read from and written back to browser storage. */
+/** The user's locally persisted Claude preferences (allowed and disallowed tool lists and project sort order) read from and written back to browser storage. */
 export type ClaudeSettings = {
   allowedTools: string[];
   disallowedTools: string[];
-  skipPermissions: boolean;
   projectSortOrder: string;
   lastUpdated?: string;
   [key: string]: unknown;
@@ -1372,10 +1371,6 @@ export type GithubTokenCredential = {
 /** The full set of user-entered values carried across the project-creation wizard's steps, owned by ProjectCreationWizard and passed down to each step. */
 export type WizardFormState = {
   workspacePath: string;
-  githubUrl: string;
-  tokenMode: TokenMode;
-  selectedGithubToken: string;
-  newGithubToken: string;
 };
 
 // ---------------------------
@@ -1482,16 +1477,13 @@ export type AgentContext = {
 };
 
 /** Identifier of a top-level section in the settings dialog; use it whenever a tab is stored, compared or requested so deep links, the sidebar and the command palette all agree on the same set of names. */
-export type SettingsMainTab = 'agents' | 'appearance' | 'git' | 'api' | 'voice' | 'tasks' | 'browser' | 'notifications' | 'plugins' | 'about';
+export type SettingsMainTab = 'agents' | 'appearance' | 'git' | 'about';
 
 /** The coding-agent CLI a settings screen is configuring, aliasing LLMProvider so agent-scoped settings read as being about an agent rather than a chat model. */
 export type AgentProvider = LLMProvider;
 
 /** One category of per-agent configuration in the agents settings tab (account, permissions, MCP servers or skills); use it to key which panel the tab renders. */
 export type AgentCategory = 'account' | 'permissions' | 'mcp' | 'skills';
-
-/** How much Codex may do without asking, from prompting on every edit to bypassing permission checks entirely; persisted as the Codex agent's permission setting. */
-export type CodexPermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions';
 
 /** A project as the settings dialog needs it - a required identifier in `name` plus optional display name and paths - passed down to the MCP and skills panels so they can scope configuration to a project. */
 export type AgentSettingsProject = {
@@ -1505,7 +1497,6 @@ export type AgentSettingsProject = {
 export type ClaudePermissionsState = {
   allowedTools: string[];
   disallowedTools: string[];
-  skipPermissions: boolean;
 };
 
 /** One of the Claude CLI's own settings files (the user's ~/.claude/settings.json or the administrator-managed file) and the permission rules it adds on top of ClaudePermissionsState; served read-only by the server, never edited in the app. `missing` and `invalid` files carry empty rule lists. */
@@ -1531,13 +1522,6 @@ export type NotificationPreferencesState = {
     stop: boolean;
     error: boolean;
   };
-};
-
-/** Cursor's persisted permission settings: the allowed and disallowed command patterns and whether permission prompts are skipped; read and written as one unit by the settings controller. */
-export type CursorPermissionsState = {
-  allowedCommands: string[];
-  disallowedCommands: string[];
-  skipPermissions: boolean;
 };
 
 /** The code editor display preferences shown in the appearance tab (word wrap, minimap, line numbers and font size), stored together as one server-backed `codeEditorSettings` preference. */

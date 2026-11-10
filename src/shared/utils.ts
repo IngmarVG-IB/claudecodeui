@@ -9,7 +9,9 @@ import type { Project, ProjectSession, QuickSettingsTab, SlashCommand } from '@/
  * Indicates whether the app runs in Platform mode (hosted) or OSS mode (self-hosted).
  * Read it to hide or gate features that only exist in one of the two deployments.
  */
-export const IS_PLATFORM = import.meta.env?.VITE_IS_PLATFORM === 'true';
+// Sandlot build: the hosted-platform mode (auth bypass, first-user login) is
+// removed. Kept as a constant so shared code still compiles; always false.
+export const IS_PLATFORM = false;
 
 // ---------------------------
 
@@ -225,10 +227,6 @@ const DEFAULT_PAGE_TITLE = 'CloudCLI UI';
  */
 export const getSessionTitle = (session: ProjectSession): string => {
   const title = (session.summary as string) || (session.name as string);
-  if (session.__provider === 'cursor') {
-    return title || 'Untitled Session';
-  }
-
   return title || 'New Session';
 };
 

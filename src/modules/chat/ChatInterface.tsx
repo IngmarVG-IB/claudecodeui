@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ArrowDownIcon } from 'lucide-react';
 
-import { useTasksSettings } from '@/modules/task-master';
 import { usePaletteOpsRegister } from '@/modules/command-palette';
 import { useWebSocket } from '@/shared/context/WebSocketContext';
 import PermissionContext from '@/modules/chat/context/PermissionContext';
@@ -46,7 +45,6 @@ type ChatInterfaceProps = {
   externalMessageUpdate?: number;
   newSessionTrigger?: number;
   onTaskClick?: (...args: unknown[]) => void;
-  onShowAllTasks?: (() => void) | null;
 };
 
 /**
@@ -69,9 +67,7 @@ function ChatInterface({
   sendByCtrlEnter,
   externalMessageUpdate,
   newSessionTrigger,
-  onShowAllTasks,
 }: ChatInterfaceProps) {
-  const { tasksEnabled, isTaskMasterInstalled } = useTasksSettings();
   const { subscribe, isConnected } = useWebSocket();
   const { t } = useTranslation('chat');
   const processingSessions = useProcessingSessions();
@@ -224,7 +220,6 @@ function ChatInterface({
     deleteQueuedDraft,
     pendingSteers,
     handleSteerOutcome,
-    handleVoiceTranscript,
     handleInputChange,
     handleKeyDown,
     handlePaste,
@@ -438,14 +433,7 @@ function ChatInterface({
   // overlapping the last message.
   const hasActivityIndicator = Boolean(sessionActivity && pendingPermissionRequests.length === 0);
 
-  const selectedProviderLabel =
-    provider === 'cursor'
-      ? t('messageTypes.cursor')
-      : provider === 'codex'
-        ? t('messageTypes.codex')
-        : provider === 'opencode'
-            ? t('messageTypes.opencode', { defaultValue: 'OpenCode' })
-          : t('messageTypes.claude');
+  const selectedProviderLabel = t('messageTypes.claude');
 
   if (!selectedProject) {
     return (
@@ -491,9 +479,6 @@ function ChatInterface({
               providerModelCatalog={providerModelCatalog}
               providerModelActions={providerModelActions}
               providerModelsLoading={providerModelsLoading}
-              tasksEnabled={tasksEnabled}
-              isTaskMasterInstalled={isTaskMasterInstalled}
-              onShowAllTasks={onShowAllTasks}
               setInput={setInput}
               isLoadingMoreMessages={isLoadingMoreMessages}
               hasMoreMessages={hasMoreMessages}
@@ -606,7 +591,6 @@ function ChatInterface({
           renderInputWithMentions={renderInputWithMentions}
           textareaRef={textareaRef}
           input={input}
-          onVoiceTranscript={handleVoiceTranscript}
           onInputChange={handleInputChange}
           onTextareaClick={handleTextareaClick}
           onTextareaKeyDown={handleKeyDown}

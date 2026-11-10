@@ -62,7 +62,7 @@ export default function QuickSettingsContent({
   onPreferenceChange,
 }: QuickSettingsContentProps) {
   const { t } = useTranslation('settings');
-  const inputSettingToggles = preferences.voiceEnabled
+  const inputSettingToggles = false
     ? INPUT_SETTING_TOGGLES
     : INPUT_SETTING_TOGGLES.filter(({ key }) => key !== 'voiceEnabled');
 

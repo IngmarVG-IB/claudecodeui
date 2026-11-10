@@ -10,9 +10,6 @@ type AgentSelectorSectionProps = {
 
 const AGENT_NAMES: Record<AgentProvider, string> = {
   claude: 'Claude',
-  cursor: 'Cursor',
-  codex: 'Codex',
-  opencode: 'OpenCode',
 };
 
 /** Rendered by AgentsSettingsTab to pick which agent provider the tab is configuring. */

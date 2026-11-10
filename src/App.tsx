@@ -4,9 +4,7 @@ import { I18nextProvider } from 'react-i18next';
 import { ThemeProvider } from '@/shared/context/ThemeContext';
 import { UiPreferencesProvider } from '@/shared/context/UiPreferencesContext';
 import { AuthProvider, ProtectedRoute } from '@/modules/auth';
-import { TaskMasterProvider,TasksSettingsProvider } from '@/modules/task-master';
 import { WebSocketProvider } from '@/shared/context/WebSocketContext';
-import { PluginsProvider } from '@/modules/plugins';
 import { ProjectWorkspaceRoute } from '@/modules/project-workspace';
 import { i18n } from '@/modules/i18n';
 
@@ -115,9 +113,6 @@ export default function App() {
         <UiPreferencesProvider>
         <AuthProvider>
           <WebSocketProvider>
-            <PluginsProvider>
-              <TasksSettingsProvider>
-                <TaskMasterProvider>
                 <ProtectedRoute>
                   <Router basename={routerBasename}>
                     <Routes>
@@ -126,9 +121,6 @@ export default function App() {
                     </Routes>
                   </Router>
                 </ProtectedRoute>
-                </TaskMasterProvider>
-              </TasksSettingsProvider>
-            </PluginsProvider>
           </WebSocketProvider>
         </AuthProvider>
         </UiPreferencesProvider>

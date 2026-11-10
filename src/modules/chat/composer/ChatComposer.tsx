@@ -10,10 +10,8 @@ import type {
   RefObject,
   TouchEvent,
 } from 'react';
-import { PaperclipIcon, MessageSquareIcon, XIcon, Loader2, PencilIcon } from 'lucide-react';
+import { PaperclipIcon, MessageSquareIcon, XIcon, PencilIcon } from 'lucide-react';
 
-import { useVoiceInput } from '@/modules/chat/hooks/useVoiceInput';
-import { useVoiceAvailable } from '@/modules/chat/hooks/useVoiceAvailable';
 import { MCP_ELICITATION_TOOL_NAME } from '@/shared/constants';
 import type { BackgroundSendChoice, BackgroundSendPrompt, PendingSteer, QueuedDraft, ScheduledMessage, SlashCommand,SessionActivity,PendingPermissionRequest,PermissionMode,ProviderModelOption } from '@/shared/types';
 import {
@@ -29,7 +27,6 @@ import {
 import CommandMenu from '@/modules/chat/composer/CommandMenu';
 import ActivityIndicator from '@/modules/chat/composer/ActivityIndicator';
 import ComposerAttachment from '@/modules/chat/composer/ComposerAttachment';
-import VoiceInputButton from '@/modules/chat/composer/VoiceInputButton';
 import PermissionRequestsBanner from '@/modules/chat/composer/PermissionRequestsBanner';
 import TokenUsageSummary from '@/modules/chat/composer/TokenUsageSummary';
 import QueuedMessageCard from '@/modules/chat/composer/QueuedMessageCard';
@@ -121,7 +118,6 @@ type ChatComposerProps = {
   renderInputWithMentions: (text: string) => ReactNode;
   textareaRef: RefObject<HTMLTextAreaElement>;
   input: string;
-  onVoiceTranscript?: (text: string, send?: boolean) => void;
   onInputChange: (event: ChangeEvent<HTMLTextAreaElement>) => void;
   onTextareaClick: (event: MouseEvent<HTMLTextAreaElement>) => void;
   onTextareaKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
@@ -201,7 +197,6 @@ export default function ChatComposer({
   renderInputWithMentions,
   textareaRef,
   input,
-  onVoiceTranscript,
   onInputChange,
   onTextareaClick,
   onTextareaKeyDown,
@@ -248,26 +243,6 @@ export default function ChatComposer({
     }
   }, [selectedFileIndex, showFileDropdown]);
 
-  // Voice state is hosted here (not in the mic button) so the main Send button can stop
-  // recording and send the transcript in one tap, the way the mic button drops it in the box.
-  const voiceAvailable = useVoiceAvailable();
-  const [voiceError, setVoiceError] = useState<string | null>(null);
-  const voiceErrorTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const handleVoiceError = useCallback((msg: string) => {
-    setVoiceError(msg);
-    if (voiceErrorTimer.current) clearTimeout(voiceErrorTimer.current);
-    voiceErrorTimer.current = setTimeout(() => setVoiceError(null), 4000);
-  }, []);
-  useEffect(() => () => {
-    if (voiceErrorTimer.current) clearTimeout(voiceErrorTimer.current);
-  }, []);
-  const noopTranscript = useCallback(() => {}, []);
-  const { state: voiceState, toggle: voiceToggle, stop: voiceStop } = useVoiceInput(
-    onVoiceTranscript ?? noopTranscript,
-    handleVoiceError,
-  );
-  const isRecording = voiceState === 'recording';
-  const isTranscribing = voiceState === 'transcribing';
 
   // Detect if an interactive panel that takes the person's answer is active:
   // a question from the agent, or an MCP server's request for input.
@@ -292,7 +267,7 @@ export default function ChatComposer({
   // With an empty composer during a turn the green button is the one-tap Stop,
   // so it says so to screen readers as it did before the send menu existed.
   const submitAriaLabel =
-    isLoading && !hasAnyInput && !isRecording && !isTranscribing ? t('input.stop') : t('input.send');
+    isLoading && !hasAnyInput ? t('input.stop') : t('input.send');
 
   return (
     <div className="chat-composer-shell relative flex-shrink-0 px-2 pb-2 pt-0 sm:px-4 sm:pb-4 md:px-4 md:pb-6">
@@ -477,10 +452,6 @@ export default function ChatComposer({
               <PaperclipIcon />
             </PromptInputButton>
 
-            {onVoiceTranscript && voiceAvailable && (
-              <VoiceInputButton state={voiceState} onToggle={voiceToggle} errorMsg={voiceError} />
-            )}
-
             <TokenUsageSummary usage={tokenBudget} onClick={onShowTokenUsage} />
 
             <PromptInputButton
@@ -533,7 +504,7 @@ export default function ChatComposer({
               providerLabel={providerLabel}
             />
 
-            {(isLoading || activity?.background) && hasAnyInput && !isRecording && !isTranscribing ? (
+            {(isLoading || activity?.background) && hasAnyInput ? (
               // The caret-trigger menu only replaces the plain button when there is
               // something to send: an empty composer during a turn keeps the
               // one-tap ■ Stop below, and an empty composer during background
@@ -556,41 +527,16 @@ export default function ChatComposer({
               />
             ) : (
               <PromptInputSubmit
-                onClick={
-                  isTranscribing
-                    ? undefined
-                    : isLoading && !isRecording
-                      ? onAbortSession
-                      : isRecording
-                        ? (e: MouseEvent<HTMLButtonElement>) => {
-                            e.preventDefault();
-                            voiceStop({ send: true });
-                          }
-                        : undefined
-                }
+                onClick={isLoading ? onAbortSession : undefined}
                 disabled={
-                  // Transcribing shows the same spinner as a running turn, but it
-                  // is not a turn: disable the button so a tap cannot reach
-                  // `onAbortSession` and end an unrelated in-flight turn.
-                  isTranscribing
-                    ? true
-                    : isLoading
-                      // With an empty composer this button is the one-tap Stop
-                      // (see `onClick` above), so it disables on `canAbortSession`
-                      // exactly like the send menu's Stop row does. Recording
-                      // keeps its own voice-stop behavior either way.
-                      ? !isRecording && !canAbortSession
-                      : isRecording
-                        ? false
-                        : !hasAnyInput
+                  // With an empty composer this button is the one-tap Stop, so it
+                  // disables on `canAbortSession` like the send menu's Stop row.
+                  isLoading ? !canAbortSession : !hasAnyInput
                 }
                 aria-label={submitAriaLabel}
                 title={submitAriaLabel}
                 className="h-10 w-10 sm:h-10 sm:w-10"
               >
-                {isTranscribing ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : undefined}
               </PromptInputSubmit>
             )}
           </div>
